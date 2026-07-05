@@ -33,7 +33,9 @@ SALIDA = DATA_DIR / "goal_index_extra.json"
 def actualizar():
     if not LIGAS_API_FOOTBALL_EXTRA:
         print("LIGAS_API_FOOTBALL_EXTRA está vacío en fetch_data.py. "
-              "No hay nada que actualizar (esto es opcional).")
+              "No hay nada que actualizar (esto es opcional). "
+              "Se guarda un archivo vacío para que el workflow no falle.")
+        SALIDA.write_text("{}", encoding="utf-8")
         return
 
     goal_index = {}
