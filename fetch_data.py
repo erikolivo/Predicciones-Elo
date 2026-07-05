@@ -22,10 +22,34 @@ Si alguna función falla, revisa:
 import csv
 import io
 import os
+import time
 import difflib
 import requests
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; EloPredictorBot/1.0)"}
+
+
+def _get_con_reintentos(url, headers=None, params=None, timeout=45, intentos=3):
+    """
+    Wrapper de requests.get() con reintentos y backoff. ClubElo en
+    particular es un sitio pequeño que a veces se sobrecarga y responde
+    lento o no responde — con 1 solo intento y 20s de espera, eso se
+    traduce en una falla del workflow. Con esto, si el primer intento
+    falla por timeout o error de conexión, esperamos un poco y
+    reintentamos, hasta 'intentos' veces, antes de rendirnos.
+    """
+    ultimo_error = None
+    for intento in range(1, intentos + 1):
+        try:
+            r = requests.get(url, headers=headers, params=params, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            ultimo_error = e
+            print(f"[AVISO] Intento {intento}/{intentos} falló para {url}: {e}")
+            if intento < intentos:
+                time.sleep(5 * intento)  # 5s, 10s, ... backoff simple
+    raise ultimo_error
 
 # API-Football (api-sports.io) - se usa SOLO para la vigilancia en vivo.
 # Plan gratis: 100 peticiones/día. Por eso todas las funciones de abajo
@@ -50,8 +74,7 @@ def obtener_fixtures_clubelo():
     Fuente: http://api.clubelo.com/Fixtures
     """
     url = "http://api.clubelo.com/Fixtures"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    r = _get_con_reintentos(url, headers=HEADERS)
     reader = csv.DictReader(io.StringIO(r.text))
     return list(reader)
 
@@ -62,8 +85,7 @@ def obtener_ranking_clubelo(fecha="today"):
     o 'today' para el más reciente.
     """
     url = f"http://api.clubelo.com/{fecha}"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    r = _get_con_reintentos(url, headers=HEADERS)
     reader = csv.DictReader(io.StringIO(r.text))
     return list(reader)
 
@@ -75,8 +97,7 @@ def obtener_historial_club(nombre_club):
     (revisa en obtener_ranking_clubelo si no estás seguro).
     """
     url = f"http://api.clubelo.com/{nombre_club}"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    r = _get_con_reintentos(url, headers=HEADERS)
     reader = csv.DictReader(io.StringIO(r.text))
     return list(reader)
 
@@ -92,7 +113,7 @@ def obtener_ranking_selecciones():
     leemos la tabla de su página principal.
     """
     url = "https://www.eloratings.net/World.tsv"
-    r = requests.get(url, headers=HEADERS, timeout=20)
+    r = _get_con_reintentos(url, headers=HEADERS)
     if r.status_code == 200 and "\t" in r.text:
         filas = [l.split("\t") for l in r.text.strip().split("\n")]
         return filas
@@ -170,8 +191,7 @@ def obtener_resultados_liga(codigo_liga, temporada="2526"):
     temporada:   ej. '2526' = temporada 2025/26
     """
     url = f"https://www.football-data.co.uk/mmz4281/{temporada}/{codigo_liga}.csv"
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    r = _get_con_reintentos(url, headers=HEADERS)
     reader = csv.DictReader(io.StringIO(r.text))
     return list(reader)
 
@@ -185,7 +205,7 @@ def obtener_resultados_liga_extra(codigo_liga):
     20 años.
     """
     url = f"https://www.football-data.co.uk/new/{codigo_liga}.csv"
-    r = requests.get(url, headers=HEADERS, timeout=20)
+    r = _get_con_reintentos(url, headers=HEADERS)
     r.raise_for_status()
     reader = csv.DictReader(io.StringIO(r.text))
     filas = list(reader)
@@ -398,3 +418,5 @@ def calcular_goal_index_desde_standings(standings):
             "goal_index": round(gf_prom - gc_prom, 2),
         }
     return resultado
+Listo
+Cómo actualizar sol
