@@ -418,5 +418,3 @@ def calcular_goal_index_desde_standings(standings):
             "goal_index": round(gf_prom - gc_prom, 2),
         }
     return resultado
-Listo
-Cómo actualizar sol
