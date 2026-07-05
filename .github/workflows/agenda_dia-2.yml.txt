@@ -1,0 +1,45 @@
+name: Agenda de partidos de hoy
+
+on:
+  schedule:
+    # 11:00 UTC = 06:00 (6am) en Colombia/Perú/Ecuador (UTC-5).
+    # Se corre a las 6am y no en la noche anterior a propósito: así el
+    # primer cupo de API-Football del día se usa para construir la lista,
+    # ANTES de que la vigilancia en vivo empiece a gastar peticiones.
+    # Si estás en otra zona horaria, ajusta este número:
+    #   México (UTC-6) -> "0 12 * * *"
+    #   Chile/Argentina (UTC-3, sin horario de verano) -> "0 9 * * *"
+    #   España (UTC+1/+2) -> "0 5 * * *" o "0 4 * * *"
+    - cron: "0 11 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  agenda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Generar agenda de hoy (vigilancia.json)
+        env:
+          API_FOOTBALL_KEY: ${{ secrets.API_FOOTBALL_KEY }}
+        run: python -c "from engine import generar_agenda_del_dia; generar_agenda_del_dia()"
+
+      - name: Construir página
+        run: python build_site.py
+
+      - name: Guardar cambios
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/vigilancia.json data/predicciones.json data/_cache_fixtures.csv docs/index.html
+          git diff --quiet --cached || git commit -m "Agenda del día generada"
+          git push
