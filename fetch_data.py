@@ -25,18 +25,19 @@ import os
 import time
 import difflib
 import requests
+from pathlib import Path
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; EloPredictorBot/1.0)"}
 
 
-def _get_con_reintentos(url, headers=None, params=None, timeout=45, intentos=3):
+def _get_con_reintentos(url, headers=None, params=None, timeout=35, intentos=5):
     """
     Wrapper de requests.get() con reintentos y backoff. ClubElo en
-    particular es un sitio pequeño que a veces se sobrecarga y responde
-    lento o no responde — con 1 solo intento y 20s de espera, eso se
-    traduce en una falla del workflow. Con esto, si el primer intento
-    falla por timeout o error de conexión, esperamos un poco y
-    reintentamos, hasta 'intentos' veces, antes de rendirnos.
+    particular es un sitio pequeño que documenta públicamente que a veces
+    se sobrecarga ("Site overloaded, only cached pages available"). Con 1
+    solo intento eso se traduce en una falla del workflow. Con esto, si un
+    intento falla por timeout o error de conexión, esperamos un poco más
+    cada vez y reintentamos, hasta 'intentos' veces, antes de rendirnos.
     """
     ultimo_error = None
     for intento in range(1, intentos + 1):
@@ -48,7 +49,7 @@ def _get_con_reintentos(url, headers=None, params=None, timeout=45, intentos=3):
             ultimo_error = e
             print(f"[AVISO] Intento {intento}/{intentos} falló para {url}: {e}")
             if intento < intentos:
-                time.sleep(5 * intento)  # 5s, 10s, ... backoff simple
+                time.sleep(8 * intento)  # 8s, 16s, 24s, 32s... backoff creciente
     raise ultimo_error
 
 # API-Football (api-sports.io) - se usa SOLO para la vigilancia en vivo.
@@ -67,16 +68,37 @@ def _headers_api_football():
 # 1. CLUB ELO  (clubes de fútbol)
 # ---------------------------------------------------------------------------
 
+CACHE_FIXTURES = Path(__file__).parent / "data" / "_cache_fixtures.csv"
+CACHE_FIXTURES.parent.mkdir(exist_ok=True)
+
+
 def obtener_fixtures_clubelo():
     """
     Devuelve la lista de próximos partidos de clubes con las probabilidades
     YA calculadas por ClubElo (1X2 y probabilidad de cada resultado exacto).
     Fuente: http://api.clubelo.com/Fixtures
+
+    Si ClubElo falla incluso tras todos los reintentos (le pasa de vez en
+    cuando: es un sitio pequeño que se sobrecarga), usamos el último
+    resultado que sí funcionó, guardado en caché, en vez de fallar por
+    completo. Así el sistema sigue funcionando con datos un poco
+    desactualizados en vez de no producir nada ese día.
     """
     url = "http://api.clubelo.com/Fixtures"
-    r = _get_con_reintentos(url, headers=HEADERS)
-    reader = csv.DictReader(io.StringIO(r.text))
-    return list(reader)
+    try:
+        r = _get_con_reintentos(url, headers=HEADERS)
+        CACHE_FIXTURES.write_text(r.text, encoding="utf-8")
+        return list(csv.DictReader(io.StringIO(r.text)))
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        if CACHE_FIXTURES.exists():
+            print(f"[AVISO] ClubElo no respondió tras varios intentos ({e}). "
+                  f"Usando el último resultado exitoso guardado en caché "
+                  f"(puede tener hasta unas horas de antigüedad).")
+            texto_cache = CACHE_FIXTURES.read_text(encoding="utf-8")
+            return list(csv.DictReader(io.StringIO(texto_cache)))
+        print("[AVISO] ClubElo no respondió y no hay caché previo disponible. "
+              "No se pueden generar predicciones esta vez.")
+        raise
 
 
 def obtener_ranking_clubelo(fecha="today"):
