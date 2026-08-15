@@ -1,0 +1,4 @@
+GESTOR DE TURNOS - VERSION FINAL REVISADA
+Base: último piloto PWA funcional (Supabase + login + sincronización + PWA).
+Cambios: doble turno compacto solo en Presentación y descarga PNG de la presentación completa,
+sin depender del viewport del teléfono. Menú y edición no modificados.

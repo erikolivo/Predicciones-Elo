@@ -1,0 +1,2297 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gestor de Turnos Farmacia</title>
+    <meta name="theme-color" content="#1d4ed8">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Gestor de Turnos">
+    <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="./dragdroptouch.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    
+    <style>
+        body { overscroll-behavior-y: none; } 
+        
+        /* MODO PRESENTACIÓN (REPORTE CORPORATIVO) */
+        .presentation-mode { background-color: #ffffff !important; }
+        .presentation-mode #topbar, .presentation-mode #btn-toggle-sidebar, .presentation-mode #grid-actions-bar, .presentation-mode #backup-actions-bar { display: none !important; }
+        .presentation-mode .grid-container { width: 100% !important; margin: 0 !important; padding: 0 !important; background: transparent; box-shadow: none; border: none; overflow: visible !important; }
+        .presentation-mode #presentation-header { display: block !important; }
+        .presentation-mode #presentation-footer-legend { display: block !important; }
+        .presentation-mode table { border-collapse: collapse !important; border: 3px solid #000; }
+        .presentation-mode th, .presentation-mode td { border: 2px solid #333 !important; background: #fff !important; color: #000 !important; }
+        .presentation-mode td:first-child, .presentation-mode th:first-child { position: static; box-shadow: none; font-size: 13px; }
+        .presentation-mode .assigned-shift { border: 1px solid #000 !important; box-shadow: none !important; padding: 4px !important; pointer-events: none !important; font-size: 13px; }
+        /* DOBLE TURNO COMPACTO: se aplica SIEMPRE (edición y Presentación) cuando una
+           celda tiene exactamente 2 turnos, para que no ensanche la fila. */
+        .assigned-shift.compact-double-shift {
+            padding: 0px 2px !important;
+            margin: 0.5px 0 !important;
+            min-height: 0 !important;
+            height: auto !important;
+            line-height: 1.1 !important;
+            font-size: 9px !important;
+            border-radius: 3px !important;
+        }
+        .assigned-shift.compact-double-shift > div {
+            padding-left: 1px !important;
+            padding-right: 1px !important;
+            line-height: 1.1 !important;
+        }
+        /* En Presentación, un poco más grande (coherente con el resto del reporte) */
+        .presentation-mode .assigned-shift.compact-double-shift {
+            padding: 1px 3px !important;
+            margin: 0.5px 0 !important;
+            min-height: 0 !important;
+            height: auto !important;
+            line-height: 1.15 !important;
+            font-size: 11px !important;
+            border-width: 1px !important;
+            border-radius: 3px !important;
+        }
+        .presentation-mode .assigned-shift.compact-double-shift > div {
+            padding-left: 1px !important;
+            padding-right: 1px !important;
+            line-height: 1.15 !important;
+        }
+
+        .presentation-mode .assigned-shift[data-novedad="true"] { background: #f3f4f6 !important; font-style: italic !important; color: #000 !important; }
+        .presentation-mode #presentation-actions { display: flex !important; }
+
+        /* MODO MONOCROMÁTICO (BLANCO Y NEGRO PARA IMPRESIÓN) */
+        .presentation-mode.monochrome-report .assigned-shift { background: #ffffff !important; color: #000000 !important; border: 1px solid #000 !important; }
+
+        @media print {
+            #topbar, #sidebar, #presentation-actions, #btn-exit-presentation, #backup-actions-bar, #grid-actions-bar { display: none !important; }
+            @page { size: landscape; margin: 1cm; }
+            body { margin: 0; padding: 0; background: #fff; height: auto !important; overflow: visible !important; }
+            #main-content-wrapper { overflow: visible !important; height: auto !important; }
+            .presentation-mode .grid-container { padding-bottom: 0 !important; overflow: visible !important; height: auto !important; max-height: none !important; }
+            /* Fuerza a que se impriman los colores de fondo, sin depender de que el usuario
+               active manualmente "Imprimir gráficos de fondo" en el diálogo de impresión. */
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color-adjust: exact !important;
+            }
+        }
+
+        table { table-layout: fixed; width: 100%; border-collapse: separate; border-spacing: 0; }
+        
+        .droppable-cell { 
+            height: 35px; 
+            transition: background-color 0.2s; 
+            padding: 4px; 
+            vertical-align: middle; 
+            border-right: 1px solid #cbd5e1;
+        }
+        .droppable-cell.drag-over { background-color: #e2e8f0; }
+        
+        .shift-block, .assigned-shift { 
+            cursor: grab; 
+            user-select: none; 
+            width: 100%; 
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap; 
+            touch-action: pan-x pan-y; 
+        }
+        .assigned-shift { margin-bottom: 2px; padding: 4px 2px; position: relative; }
+        .assigned-shift:last-child { margin-bottom: 0; }
+        .shift-block:active, .assigned-shift:active { cursor: grabbing; }
+
+        #favorites-container .shift-block { width: auto; }
+
+        th { border-bottom: 2px solid #94a3b8; border-top: 1px solid #e5e7eb; }
+        .sticky-col { position: sticky; left: 0; z-index: 20; border-right: 2px solid #cbd5e1; }
+        .sticky-col-header { position: sticky; left: 0; z-index: 30; background-color: #eff6ff; border-right: 2px solid #cbd5e1; }
+
+        tr.employee-row { border-bottom: 2px solid #94a3b8; } 
+        .row-even { background-color: #ffffff; }
+        .row-even .sticky-col { background-color: #ffffff; }
+        .row-odd { background-color: #f1f5f9; } 
+        .row-odd .sticky-col { background-color: #f1f5f9; }
+
+        #sidebar {
+            position: fixed; top: 0; right: 0; height: 100%; width: 320px; max-width: 90vw;
+            transform: translateX(100%); transition: transform 0.3s ease-in-out; z-index: 50;
+        }
+        #sidebar.open { transform: translateX(0); box-shadow: -4px 0 15px rgba(0,0,0,0.1); }
+        #sidebar-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+            z-index: 40; backdrop-filter: blur(2px);
+        }
+        #sidebar-overlay.open { display: block; }
+
+        .thick-scrollbar { overscroll-behavior: contain; }
+        .thick-scrollbar::-webkit-scrollbar { width: 22px; }
+        .thick-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-left: 1px solid #e2e8f0; }
+        .thick-scrollbar::-webkit-scrollbar-thumb { background-color: #94a3b8; border-radius: 10px; border: 4px solid #f1f5f9; }
+        .thick-scrollbar::-webkit-scrollbar-thumb:active { background-color: #475569; }
+
+        /* PALETA DE COLORES AMPLIADA */
+        .bg-pastel-blue { background-color: #1E88FF; color: #ffffff; }
+        .bg-pastel-pink { background-color: #FF2D95; color: #ffffff; }
+        .bg-pastel-yellow { background-color: #FFD500; color: #1a1a1a; }
+        .bg-pastel-purple { background-color: #A335F0; color: #ffffff; }
+        .bg-pastel-orange { background-color: #FF7A00; color: #ffffff; }
+        .bg-pastel-green { background-color: #22C55E; color: #ffffff; }
+        .bg-pastel-gray { background-color: #94A3B8; color: #0f172a; }
+        .bg-corp-blue { background-color: #0044CC; color: #ffffff; }
+        .bg-corp-emerald { background-color: #00875A; color: #ffffff; }
+        .bg-corp-amber { background-color: #E6A800; color: #1a1a1a; }
+        .bg-corp-rose { background-color: #E4003A; color: #ffffff; }
+        .bg-corp-indigo { background-color: #3D2FFF; color: #ffffff; }
+        .bg-corp-teal { background-color: #00BFAE; color: #052e2b; }
+        .bg-corp-slate { background-color: #334155; color: #ffffff; }
+        .bg-corp-purple { background-color: #7A0BC0; color: #ffffff; }
+        /* AUTENTICACIÓN / PWA */
+        body.auth-locked > *:not(#auth-screen) { visibility: hidden !important; }
+        #auth-screen { position: fixed; inset: 0; z-index: 99999; display: flex; align-items: center; justify-content: center; padding: 20px; background: linear-gradient(135deg,#eff6ff 0%,#f8fafc 55%,#ecfdf5 100%); }
+        #auth-screen.hidden { display: none !important; }
+        .auth-card { width: min(430px, 100%); background: rgba(255,255,255,.96); border: 1px solid #dbeafe; border-radius: 24px; box-shadow: 0 25px 60px rgba(15,23,42,.14); padding: 28px; }
+        .auth-logo { width: 58px; height: 58px; border-radius: 18px; display:flex; align-items:center; justify-content:center; background:#1d4ed8; color:#fff; font-size:28px; margin:0 auto 14px; box-shadow:0 10px 24px rgba(29,78,216,.25); }
+        .auth-field { width:100%; padding:12px 14px; border:1px solid #cbd5e1; border-radius:12px; outline:none; font-size:14px; transition:.15s; }
+        .auth-field:focus { border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.12); }
+        .auth-btn { width:100%; padding:12px 14px; border:0; border-radius:12px; font-weight:800; cursor:pointer; transition:.15s; }
+        .auth-btn.primary { background:#2563eb; color:#fff; }
+        .auth-btn.primary:hover { background:#1d4ed8; }
+        .auth-btn.secondary { background:#eff6ff; color:#1d4ed8; }
+        .auth-message { min-height:20px; font-size:12px; text-align:center; margin-top:10px; }
+        #account-pill { display:none; }
+        @media (max-width: 900px) {
+            body { height: auto !important; min-height: 100vh; overflow-y: auto !important; overflow-x: hidden !important; }
+            #main-content-wrapper { overflow: visible !important; min-height: 50vh; }
+            #favorites-container { max-height: 140px; overflow-y: auto !important; }
+        }
+        /* Aviso de orientación: banner informativo, NO bloquea la interacción */
+        #orientation-hint { display:none; }
+        @media (max-width: 700px) and (orientation:portrait) {
+            #orientation-hint:not(.dismissed) {
+                display:flex; position:sticky; top:0; left:0; right:0; z-index:60;
+                background:#1d4ed8; color:#fff; align-items:center; justify-content:space-between;
+                gap:10px; padding:8px 14px; font-size:12px; font-weight:700;
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans h-screen flex flex-col overflow-hidden relative auth-locked">
+    <div id="auth-screen">
+        <div class="auth-card">
+            <div class="auth-logo">📅</div>
+            <h2 class="text-2xl font-black text-center text-blue-900">Gestor de Turnos</h2>
+            <p class="text-sm text-gray-500 text-center mt-1 mb-6">Acceso privado a tu planificación</p>
+
+            <div id="auth-login-view">
+                <label class="block text-xs font-bold text-gray-700 mb-1">Correo electrónico</label>
+                <input id="auth-email" class="auth-field mb-3" type="email" autocomplete="email" placeholder="tu@correo.com">
+                <label class="block text-xs font-bold text-gray-700 mb-1">Contraseña</label>
+                <input id="auth-password" class="auth-field mb-4" type="password" autocomplete="current-password" placeholder="Tu contraseña">
+                <button id="auth-login" class="auth-btn primary">Iniciar sesión</button>
+                <button id="auth-show-signup" class="auth-btn secondary mt-2">Crear una cuenta</button>
+            </div>
+
+            <div id="auth-signup-view" class="hidden">
+                <label class="block text-xs font-bold text-gray-700 mb-1">Correo electrónico</label>
+                <input id="auth-signup-email" class="auth-field mb-3" type="email" autocomplete="email" placeholder="tu@correo.com">
+                <label class="block text-xs font-bold text-gray-700 mb-1">Contraseña</label>
+                <input id="auth-signup-password" class="auth-field mb-4" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres">
+                <button id="auth-signup" class="auth-btn primary">Crear cuenta</button>
+                <button id="auth-show-login" class="auth-btn secondary mt-2">Ya tengo una cuenta</button>
+            </div>
+            <div id="auth-message" class="auth-message text-gray-500"></div>
+        </div>
+    </div>
+    <div id="orientation-hint">
+        <span>↻ Para mejor experiencia, gira tu teléfono a horizontal</span>
+        <button id="btn-close-orientation-hint" style="background:rgba(255,255,255,.2); border:none; color:#fff; border-radius:8px; padding:2px 10px; font-weight:800; cursor:pointer; flex-shrink:0;">✕</button>
+    </div>
+
+    <!-- Controles flotantes Modo Presentación -->
+    <div id="presentation-actions" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-3 z-50 bg-white/90 backdrop-blur p-2 rounded-full shadow-2xl border border-gray-300">
+        <label class="flex items-center gap-2 cursor-pointer px-3 py-2 text-xs font-bold text-gray-700 bg-gray-100 rounded-full hover:bg-gray-200 transition">
+            <input type="checkbox" id="toggle-colors-checkbox" checked onchange="togglePresentationColors(this.checked)" class="rounded text-blue-600 focus:ring-blue-500"> 
+            🎨 Mostrar Colores
+        </label>
+        <button id="btn-download-image" class="bg-blue-600 text-white px-4 py-2 rounded-full font-bold text-xs hover:bg-blue-700 transition shadow">
+            📸 Descargar Imagen
+        </button>
+        <button id="btn-print-pdf" class="bg-gray-800 text-white px-4 py-2 rounded-full font-bold text-xs hover:bg-gray-900 transition shadow">
+            🖨️ Imprimir / PDF
+        </button>
+        <button id="btn-exit-presentation" class="bg-red-600 text-white px-4 py-2 rounded-full font-bold text-xs hover:bg-red-700 transition shadow">
+            ❌ Salir
+        </button>
+    </div>
+
+    <!-- Top Bar -->
+    <div id="topbar" class="bg-white shadow-sm p-4 flex flex-col xl:flex-row justify-between items-start xl:items-center z-10 gap-4 shrink-0 border-b border-gray-200">
+        
+        <div class="flex items-center w-full xl:w-auto shrink-0 justify-between xl:justify-start">
+            <h1 class="font-black text-2xl text-blue-900 tracking-tight">Control de Malla</h1>
+            <div id="account-pill" class="text-xs font-bold text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-3 py-1"></div>
+            <button id="auth-logout" class="text-xs font-bold text-red-600 bg-red-50 border border-red-200 rounded-full px-3 py-1 hover:bg-red-100 transition" title="Cerrar sesión">Salir</button>
+            <div id="trash-zone" class="bg-red-100 text-red-700 border border-red-300 rounded-lg px-4 py-2 text-xl flex items-center shadow-sm shrink-0 ml-4 cursor-pointer" title="Arrastra turnos aquí para borrar">
+                🗑️
+            </div>
+        </div>
+        
+        <div class="flex flex-col md:flex-row gap-4 w-full xl:w-auto flex-1 items-start md:items-stretch justify-end">
+            
+            <div id="favorites-dropzone" class="flex-1 border border-yellow-300 bg-yellow-50 rounded-xl p-2 w-full shadow-sm relative pt-5 min-h-[60px]">
+                <span class="absolute top-0 left-3 -mt-3 bg-yellow-400 px-3 py-1 text-[10px] uppercase tracking-wider font-bold text-yellow-900 rounded-md shadow-sm">⭐ Mis Favoritos</span>
+                <div id="favorites-container" class="flex flex-wrap gap-2 items-center content-start">
+                    <span class="text-sm text-gray-500 italic">Arrastra tus turnos aquí...</span>
+                </div>
+            </div>
+
+            <!-- Menú Herramientas -->
+            <div class="relative w-full md:w-auto shrink-0">
+                <button id="btn-tools-toggle" class="w-full md:w-auto px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm rounded-xl border border-gray-300 shadow-sm flex items-center justify-between md:justify-center gap-2">
+                    <span>⚙️ Herramientas</span>
+                    <span id="tools-arrow" class="transition-transform transform">▼</span>
+                </button>
+
+                <div id="tools-dropdown" class="hidden absolute right-0 mt-2 bg-white border border-gray-200 shadow-xl rounded-xl p-3 z-50 flex flex-col gap-2 whitespace-nowrap md:w-64">
+                    <button id="btn-toggle-sidebar" class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold text-xs md:text-sm transition shadow-sm flex items-center justify-between border border-blue-700">
+                        <span><span class="text-lg leading-none mr-1">🔎</span> Turnos GPF</span>
+                    </button>
+                    <button id="btn-presentation" class="px-3 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 font-bold text-xs md:text-sm transition shadow-sm border border-gray-200 text-left">
+                        📺 Presentación
+                    </button>
+                    <hr class="border-gray-200">
+                    <label class="px-3 py-2 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 font-bold text-xs md:text-sm transition shadow-sm flex items-center border border-purple-200 cursor-pointer">
+                        <span class="text-base leading-none mr-1.5">👥</span> Personal (.xlsx)
+                        <input type="file" id="upload-staff" accept=".xlsx" class="hidden">
+                    </label>
+                    <button id="btn-config" class="px-3 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 font-bold text-xs md:text-sm transition shadow-sm border border-gray-200 text-left">
+                        ⚙️ Configuración
+                    </button>
+                    <hr class="border-gray-200">
+                    <button id="btn-guardar-semana" class="px-3 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-bold text-xs md:text-sm transition shadow-sm border border-blue-200 text-left">
+                        💾 Guardar Semana
+                    </button>
+                    <button id="btn-historial" class="px-3 py-2 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 font-bold text-xs md:text-sm transition shadow-sm border border-gray-200 text-left">
+                        📜 Historial
+                    </button>
+                    <button id="btn-download" class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold text-xs md:text-sm transition shadow-sm border border-green-700 text-left">
+                        ⬇️ Subir Biométrico
+                    </button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex flex-1 overflow-hidden relative bg-gray-200" id="main-content-wrapper">
+        
+        <!-- Grid Central -->
+        <div class="flex-1 p-2 md:p-4 overflow-auto grid-container transition-all w-full pb-32" id="capture-area">
+            
+            <!-- Encabezado Modo Presentación -->
+            <div id="presentation-header" class="hidden mb-6 mt-4 px-4">
+                <h1 class="text-3xl font-black text-center mb-2 uppercase tracking-wide text-gray-900">Malla Operativa Semanal</h1>
+                <div class="border-b-2 border-gray-800 pb-2">
+                    <p class="font-black text-xl text-gray-800 uppercase" id="ph-sucursal">SUCURSAL</p>
+                    <p class="text-base text-gray-700 font-medium" id="ph-fechas">Rango de fechas</p>
+                </div>
+            </div>
+
+            <!-- Barra de acciones de la malla (oculta en Presentación) -->
+            <div id="grid-actions-bar" class="flex justify-end mb-2">
+                <button id="btn-reset-malla" class="px-3 py-1.5 bg-red-50 text-red-700 border border-red-300 rounded-lg hover:bg-red-100 font-bold text-xs shadow-sm flex items-center gap-1.5">
+                    🧹 Resetear Malla
+                </button>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-lg overflow-x-auto border border-gray-300">
+                <table class="w-full text-sm text-left table-fixed min-w-[1100px]">
+                    <thead class="bg-blue-50 text-blue-900 shadow-sm">
+                        <tr>
+                            <th class="w-[90px] md:w-[120px] p-2 text-xs md:text-sm sticky-col-header shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">NOMBRES</th>
+                            <th class="p-1 md:p-2 border-r text-center cursor-pointer hover:bg-blue-100 transition relative group" onclick="document.getElementById('monday-date').showPicker()">
+                                <div class="text-[10px] md:text-sm font-bold">LUNES</div>
+                                <div id="lunes-label" class="font-normal text-[10px] md:text-xs text-blue-600">DD/MM</div>
+                                <input type="date" id="monday-date" class="absolute opacity-0 top-0 left-0 w-full h-full cursor-pointer">
+                            </th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">MARTES</div> <div id="martes-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">MIÉRCOLES</div> <div id="miercoles-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">JUEVES</div> <div id="jueves-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">VIERNES</div> <div id="viernes-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">SÁBADO</div> <div id="sabado-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 border-r text-center"><div class="text-[10px] md:text-sm font-bold">DOMINGO</div> <div id="domingo-label" class="font-normal text-[10px] md:text-xs text-gray-500">DD/MM</div></th>
+                            <th class="p-1 md:p-2 text-center bg-gray-100 text-[10px] md:text-sm w-12 md:w-16">TOTAL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="grid-body">
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Exportar Excel con doble formato (oculto en Presentación) -->
+            <div id="backup-actions-bar" class="flex justify-end mt-2">
+                <button id="btn-respaldo-excel" class="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 font-bold text-xs shadow-sm flex items-center gap-1.5">
+                    📊 Descargar Excel (Farmacia + Biométrico)
+                </button>
+            </div>
+
+            <!-- Leyenda Automática de Tareas en Presentación -->
+            <div id="presentation-footer-legend" class="hidden mt-8 px-4 border-t-2 border-gray-800 pt-4">
+                <h3 class="font-bold text-lg text-gray-900 mb-3 uppercase tracking-wide">📋 Responsabilidades por Color</h3>
+                <div id="legend-items-container" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                </div>
+            </div>
+
+            <div class="h-20 md:h-20 w-full"></div>
+        </div>
+
+        <div id="sidebar-overlay"></div>
+
+        <!-- Panel Lateral Desplegable -->
+        <div id="sidebar" class="bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+            <div class="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-start">
+                <div class="flex-1 mr-2">
+                    <input type="text" id="search-shift" placeholder="Buscar turno..." class="w-full p-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <p class="text-[10px] text-gray-500 mt-1 leading-tight text-justify">💡 Usa la barra gruesa derecha para bajar. Mantén presionado un turno para arrastrarlo.</p>
+                </div>
+                <button id="btn-close-sidebar" class="text-gray-500 hover:text-red-500 p-1 text-2xl leading-none">&times;</button>
+            </div>
+            
+            <div class="p-4 flex-1 overflow-y-auto thick-scrollbar">
+                <div id="shifts-list" class="flex flex-col space-y-2 pb-10"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- PWA: registro del Service Worker ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js').catch(err => {
+                    console.warn('Service Worker no disponible:', err);
+                });
+            });
+        }
+        // Aviso de orientación: solo informativo, el usuario puede cerrarlo y seguir usando la app en vertical.
+        document.getElementById('btn-close-orientation-hint')?.addEventListener('click', () => {
+            document.getElementById('orientation-hint').classList.add('dismissed');
+        });
+        // --- ARRASTRE TÁCTIL: solo se activa "manteniendo presionado" el turno ---
+        // Esto NO afecta el mouse en computadora (esa librería solo escucha eventos táctiles).
+        // Si el dedo se desliza (scroll) sin mantener quieto, el arrastre se cancela y
+        // la pantalla se desplaza normalmente en vez de mover el turno sin querer.
+        if (window.DragDropTouch && window.DragDropTouch.DragDropTouch) {
+            const DDT = window.DragDropTouch.DragDropTouch;
+            DDT._ISPRESSHOLDMODE = true;   // exige mantener presionado antes de arrastrar
+            DDT._PRESSHOLDAWAIT = 280;     // ms que hay que mantener quieto el dedo
+            DDT._PRESSHOLDMARGIN = 18;     // px de tolerancia por temblor del dedo antes de cancelar
+        }
+    </script>
+
+    <script>
+        // --- SUPABASE AUTH + SINCRONIZACIÓN POR CUENTA ---
+        const SUPABASE_URL = 'https://trwwdnttfhrmtfbshygc.supabase.co';
+        const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_v8LkLN0wakfpVJZwvYkuAA_mHIOcWgw';
+        const { createClient } = window.supabase;
+        const supabaseClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+        const CLOUD_TABLE = 'user_app_state';
+        const CLOUD_KEYS = ['farmacia_empleados_v10','farmacia_config_v10','farmacia_historial_v10','favoritos_turnos'];
+        let authUser = null;
+        let cloudReady = false;
+        let cloudHydrating = false;
+        let cloudTimer = null;
+
+        function authMsg(text, kind='normal') {
+            const el = document.getElementById('auth-message');
+            if (!el) return;
+            el.textContent = text || '';
+            el.className = 'auth-message ' + (kind === 'error' ? 'text-red-600' : kind === 'ok' ? 'text-emerald-600' : 'text-gray-500');
+        }
+
+        function showAuthView(signup) {
+            document.getElementById('auth-login-view').classList.toggle('hidden', signup);
+            document.getElementById('auth-signup-view').classList.toggle('hidden', !signup);
+            authMsg('');
+        }
+
+        function localPayload() {
+            const payload = {};
+            CLOUD_KEYS.forEach(k => {
+                const value = localStorage.getItem(k);
+                if (value !== null) payload[k] = value;
+            });
+            return payload;
+        }
+
+        function applyCloudPayload(payload) {
+            if (!payload) return;
+            CLOUD_KEYS.forEach(k => {
+                if (Object.prototype.hasOwnProperty.call(payload, k)) localStorage.setItem(k, payload[k]);
+            });
+        }
+
+        async function loadCloudState(user) {
+            const { data, error } = await supabaseClient
+                .from(CLOUD_TABLE)
+                .select('payload, updated_at')
+                .eq('user_id', user.id)
+                .maybeSingle();
+            if (error) throw error;
+            if (data?.payload) {
+                cloudHydrating = true;
+                applyCloudPayload(data.payload);
+                cloudHydrating = false;
+                sessionStorage.setItem('cloud_hydrated_for_user', user.id);
+                // Recarga para que el gestor lea los datos de nube desde su inicialización.
+                location.reload();
+                return true;
+            }
+            sessionStorage.setItem('cloud_hydrated_for_user', user.id);
+            return false;
+        }
+
+        async function pushCloudState() {
+            if (!authUser || !cloudReady || cloudHydrating) return;
+            const { error } = await supabaseClient.from(CLOUD_TABLE).upsert({
+                user_id: authUser.id,
+                payload: localPayload(),
+                updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id' });
+            if (error) console.error('Supabase sync:', error);
+        }
+
+        function queueCloudSync() {
+            if (!authUser || !cloudReady || cloudHydrating) return;
+            clearTimeout(cloudTimer);
+            cloudTimer = setTimeout(pushCloudState, 900);
+        }
+
+        // Intercepta los guardados locales del gestor para sincronizar la copia de este usuario.
+        const originalSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function(key, value) {
+            originalSetItem.call(this, key, value);
+            if (this === localStorage && CLOUD_KEYS.includes(key)) queueCloudSync();
+        };
+
+        async function enterApp(user) {
+            authUser = user;
+            const hydratedFor = sessionStorage.getItem('cloud_hydrated_for_user');
+            if (hydratedFor !== user.id) {
+                try {
+                    const didReload = await loadCloudState(user);
+                    if (didReload) return;
+                } catch (err) {
+                    console.error(err);
+                    authMsg('No se pudo consultar tu nube. Puedes continuar con los datos locales.', 'error');
+                }
+            }
+            cloudReady = true;
+            document.body.classList.remove('auth-locked');
+            document.getElementById('auth-screen').classList.add('hidden');
+            const pill = document.getElementById('account-pill');
+            if (pill) { pill.textContent = user.email || 'Usuario'; pill.style.display = 'inline-flex'; }
+            const logout = document.getElementById('auth-logout');
+            if (logout) logout.style.display = 'inline-flex';
+        }
+
+        async function startAuth() {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (session?.user) {
+                await enterApp(session.user);
+            } else {
+                document.body.classList.add('auth-locked');
+                document.getElementById('auth-screen').classList.remove('hidden');
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            document.getElementById('auth-show-signup').addEventListener('click', () => showAuthView(true));
+            document.getElementById('auth-show-login').addEventListener('click', () => showAuthView(false));
+
+            document.getElementById('auth-login').addEventListener('click', async () => {
+                const email = document.getElementById('auth-email').value.trim();
+                const password = document.getElementById('auth-password').value;
+                if (!email || !password) return authMsg('Escribe correo y contraseña.', 'error');
+                authMsg('Iniciando sesión...');
+                const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+                if (error) return authMsg(error.message, 'error');
+                authMsg('Acceso correcto.', 'ok');
+                await enterApp(data.user);
+            });
+
+            document.getElementById('auth-signup').addEventListener('click', async () => {
+                const email = document.getElementById('auth-signup-email').value.trim();
+                const password = document.getElementById('auth-signup-password').value;
+                if (!email || !password) return authMsg('Escribe correo y contraseña.', 'error');
+                if (password.length < 6) return authMsg('La contraseña debe tener al menos 6 caracteres.', 'error');
+                authMsg('Creando cuenta...');
+                const { data, error } = await supabaseClient.auth.signUp({ email, password });
+                if (error) return authMsg(error.message, 'error');
+                if (data.session?.user) {
+                    authMsg('Cuenta creada.', 'ok');
+                    await enterApp(data.session.user);
+                } else {
+                    authMsg('Cuenta creada. Revisa tu correo para confirmar la cuenta y luego inicia sesión.', 'ok');
+                }
+            });
+
+            document.getElementById('auth-logout').addEventListener('click', async () => {
+                await supabaseClient.auth.signOut();
+                sessionStorage.removeItem('cloud_hydrated_for_user');
+                location.reload();
+            });
+
+            supabaseClient.auth.onAuthStateChange(async (event, session) => {
+                if (event === 'SIGNED_OUT') {
+                    authUser = null; cloudReady = false;
+                    sessionStorage.removeItem('cloud_hydrated_for_user');
+                }
+            });
+
+            await startAuth();
+        });
+    </script>
+    <script>
+        const b64Template = "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";
+        const turnosDB = [{"codigo": "", "desc": "LIBRE"}, {"codigo": "", "desc": "VACACIONES"}, {"codigo": "", "desc": "PERMISO MÉDICO"}, {"codigo": "9999", "desc": "TURNO DELTA 9999"}, {"codigo": "10455", "desc": "00:00 a 04:00 SHIFT"}, {"codigo": "10611", "desc": "07:00 a 14:00"}, {"codigo": "10713", "desc": "07:00 a 14:00 SHIFT"}, {"codigo": "10536", "desc": "00:00 a 08:00"}, {"codigo": "10410", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10479", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10505", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10510", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10517", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10522", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10527", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10531", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10539", "desc": "01:00 a 07:00 SHIFT"}, {"codigo": "10544", "desc": "01:00 a 07:00 SHIFT_"}, {"codigo": "10138", "desc": "05:00 a 13:30 SHIFT_"}, {"codigo": "10289", "desc": "05:00 a 13:00 TUKUNA"}, {"codigo": "10181", "desc": "06:00 a 14:30 SHIFT"}, {"codigo": "10192", "desc": "06:00 a 10:00 SHIFT_"}, {"codigo": "10193", "desc": "06:00 a 10:30 SHIFT_"}, {"codigo": "10219", "desc": "06:00 a 11:00 SHIFT_"}, {"codigo": "10405", "desc": "06:00 a 12:00 SHIFT_"}, {"codigo": "10565", "desc": "06:00 a 14:30 SHIFT_"}, {"codigo": "10567", "desc": "06:00 a 14:00 SHIFT"}, {"codigo": "10572", "desc": "06:00 a 12:30 SHIFT"}, {"codigo": "10579", "desc": "06:00 a 12:30 SHIFT_"}, {"codigo": "10589", "desc": "06:00 a 08:00 SHIFT"}, {"codigo": "10591", "desc": "06:00 a 14:00 SHIFT_"}, {"codigo": "290", "desc": "06:30 A 12:30 LACTANCIA"}, {"codigo": "10211", "desc": "06:30 a 15:00 SHIFT_"}, {"codigo": "10412", "desc": "06:30 a 14:30 SHIFT"}, {"codigo": "10476", "desc": "06:30 a 14:30 SHIFT"}, {"codigo": "10566", "desc": "06:30 a 10:30 SHIFT_"}, {"codigo": "10583", "desc": "06:30 a 14:30 SHIFT_"}, {"codigo": "10630", "desc": "06:30 a 13:00 SHIFT_"}, {"codigo": "10635", "desc": "06:30 a 12:00"}, {"codigo": "10640", "desc": "06:30 a 11:30 SHIFT_"}, {"codigo": "10658", "desc": "06:30 a 11:00 SHIFT_"}, {"codigo": "10706", "desc": "06:30 a 12:00 SHIFT_"}, {"codigo": "10710", "desc": "06:30 a 12:30 SHIFT_"}, {"codigo": "248", "desc": "07:00 A 13:00 LACTANCIA"}, {"codigo": "10073", "desc": "07:00 a 15:30 SHIFT 10073"}, {"codigo": "10099", "desc": "07:00 a 12:00 SHIFT_"}, {"codigo": "10155", "desc": "07:00 a 11:30 SHIFT_"}, {"codigo": "10157", "desc": "07:00 a 13:30 SHIFT"}, {"codigo": "10169", "desc": "07:00 a 15:00 SHIFT"}, {"codigo": "10217", "desc": "07:00 a 11:00 SHIFT_"}, {"codigo": "10274", "desc": "07:00 a 11:45 SHIFT_"}, {"codigo": "10276", "desc": "07:00 a 10:00 SHIFT_"}, {"codigo": "10295", "desc": "07:00 a 10:30 SHIFT_"}, {"codigo": "10303", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10309", "desc": "07:00 a 13:00 SHIFT"}, {"codigo": "10333", "desc": "07:00 a 11:15 SHIFT_"}, {"codigo": "10347", "desc": "07:00 a 10:15 SHIFT_"}, {"codigo": "10389", "desc": "07:00 a 10:45 SHIFT_"}, {"codigo": "10415", "desc": "07:00 a 13:00 SHIFT_"}, {"codigo": "10416", "desc": "07:00 a 15:00 SHIFT_"}, {"codigo": "10420", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10423", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10426", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10434", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10436", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10450", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10459", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10466", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10469", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10480", "desc": "07:00 a 13:30 SHIFT_"}, {"codigo": "10482", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10577", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10590", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10595", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10605", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10639", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10662", "desc": "07:00 a 15:30 SHIFT"}, {"codigo": "10665", "desc": "07:00 a 12:00 SHIFT"}, {"codigo": "10666", "desc": "07:00 a 11:00 SHIFT"}, {"codigo": "10668", "desc": "07:00 a 15:30 SHIFT_"}, {"codigo": "10677", "desc": "07:00 a 15:30 SHIFT P"}, {"codigo": "10690", "desc": "07:00 a 12:30 SHIFT_"}, {"codigo": "10724", "desc": "07:00 a 14:00 SHIFT_"}, {"codigo": "10728", "desc": "07:00 a 13:00 - SHIFT"}, {"codigo": "10730", "desc": "07:00 a 13:00 - SHIFT"}, {"codigo": "10062", "desc": "07:30 a 16:00 SHIFT"}, {"codigo": "10079", "desc": "07:30 a 12:30 SHIFT_"}, {"codigo": "10195", "desc": "07:30 a 11:30 SHIFT_"}, {"codigo": "10212", "desc": "07:30 a 12:00 SHIFT_"}, {"codigo": "10228", "desc": "07:30 a 15:30 SHIFT_"}, {"codigo": "10232", "desc": "07:30 a 14:00 SHIFT"}, {"codigo": "10267", "desc": "07:30 a 11:00 SHIFT_"}, {"codigo": "10272", "desc": "07:30 a 10:30 SHIFT_"}, {"codigo": "10297", "desc": "07:30 a 16:00 SHIFT"}, {"codigo": "10378", "desc": "07:30 a 12:15 SHIFT_"}, {"codigo": "10386", "desc": "07:30 a 11:15 SHIFT_"}, {"codigo": "10394", "desc": "07:30 a 10:45 SHIFT_"}, {"codigo": "10409", "desc": "07:30 a 13:30 SHIFT"}, {"codigo": "10431", "desc": "07:30 a 16:00 SHIFT"}, {"codigo": "10438", "desc": "07:30 a 13:30 SHIFT"}, {"codigo": "10443", "desc": "07:30 a 14:00 SHIFT"}, {"codigo": "10452", "desc": "07:30 a 16:00 SHIFT_"}, {"codigo": "10464", "desc": "07:30 a 13:00 SHIFT_"}, {"codigo": "10587", "desc": "07:30 a 14:00 SHIFT_"}, {"codigo": "10607", "desc": "07:30 a 13:30 SHIFT"}, {"codigo": "10613", "desc": "07:30 a 13:30 LACTANCIA"}, {"codigo": "10624", "desc": "07:30 a 13:00 - 18:30 a 21:00"}, {"codigo": "10659", "desc": "07:30 a 12:30 SHIFT"}, {"codigo": "10675", "desc": "07:30 a 14:30 SHIFT_"}, {"codigo": "10678", "desc": "07:30 a 13:30 SHIFT_"}, {"codigo": "184", "desc": "08:00 A 14:00 LACTANCIA"}, {"codigo": "10058", "desc": "08:00 a 16:30 SHIFT"}, {"codigo": "10066", "desc": "08:00 a 12:00 SHIFT_"}, {"codigo": "10070", "desc": "08:00 a 13:00 SHIFT"}, {"codigo": "10083", "desc": "08:00 a 14:00 SHIFT"}, {"codigo": "10096", "desc": "08:00 a 14:30 SHIFT"}, {"codigo": "10129", "desc": "08:00 a 12:45 SHIFT_"}, {"codigo": "10132", "desc": "08:00 a 16:00 SHIFT"}, {"codigo": "10133", "desc": "08:00 a 12:30 SHIFT_"}, {"codigo": "10148", "desc": "08:00 a 11:00 SHIFT_"}, {"codigo": "10180", "desc": "08:00 a 15:00 SHIFT_"}, {"codigo": "10236", "desc": "08:00 a 11:30 SHIFT_"}, {"codigo": "10316", "desc": "08:00 a 11:45 SHIFT_"}, {"codigo": "10318", "desc": "08:00 a 12:15 SHIFT_"}, {"codigo": "10322", "desc": "08:00 a 11:15 SHIFT_"}, {"codigo": "10402", "desc": "08:00 a 13:30 SHIFT_"}, {"codigo": "10411", "desc": "08:00 a 14:00 SHIFT_"}, {"codigo": "10421", "desc": "08:00 a 13:00 SHIFT_"}, {"codigo": "10429", "desc": "08:00 a 16:00 SHIFT_"}, {"codigo": "10439", "desc": "08:00 a 16:30 SHIFT"}, {"codigo": "10441", "desc": "08:00 a 14:30 SHIFT"}, {"codigo": "10451", "desc": "08:00 a 16:30 SHIFT"}, {"codigo": "10458", "desc": "08:00 a 16:30 SHIFT_"}, {"codigo": "10592", "desc": "08:00 a 14:30 SHIFT_"}, {"codigo": "10604", "desc": "08:00 a 10:00 SHIFT"}, {"codigo": "10642", "desc": "08:00 a 16:00 SHIFT"}, {"codigo": "10646", "desc": "08:00 a 10:00 SHIFT"}, {"codigo": "10648", "desc": "08:00 a 10:00 SHIFT"}, {"codigo": "10716", "desc": "08:00 a 14:00 SHIFT"}, {"codigo": "354", "desc": "08:30 A 14:30 LACTANCIA"}, {"codigo": "10089", "desc": "08:30 a 13:30 SHIFT_"}, {"codigo": "10095", "desc": "08:30 a 17:00 SHIFT_"}, {"codigo": "10108", "desc": "08:30 a 12:30 SHIFT_"}, {"codigo": "10141", "desc": "08:30 a 15:00 SHIFT_"}, {"codigo": "10184", "desc": "08:30 a 13:00 SHIFT_"}, {"codigo": "10223", "desc": "08:30 a 16:30 SHIFT_"}, {"codigo": "10238", "desc": "08:30 a 11:30 SHIFT_"}, {"codigo": "10244", "desc": "08:30 a 12:00 SHIFT_"}, {"codigo": "10320", "desc": "08:30 a 11:45 SHIFT_"}, {"codigo": "10335", "desc": "08:30 a 14:30 SHIFT"}, {"codigo": "10336", "desc": "08:30 a 13:15 SHIFT_"}, {"codigo": "10366", "desc": "08:30 a 12:15 SHIFT_"}, {"codigo": "10382", "desc": "08:30 a 12:45 SHIFT_"}, {"codigo": "10625", "desc": "08:30 a 14:30 SHIFT_"}, {"codigo": "10638", "desc": "08:30 A 14:30 LACTANCIA"}, {"codigo": "10686", "desc": "08:30 a 14:00 SHIFT_"}, {"codigo": "185", "desc": "09:00 A 15:00 LACTANCIA"}, {"codigo": "605", "desc": "09:00 a 15:30 FERIADO SHIFT"}, {"codigo": "10065", "desc": "09:00 a 17:30 SHIFT_"}, {"codigo": "10068", "desc": "09:00 a 14:00 SHIFT_"}, {"codigo": "10081", "desc": "09:00 a 13:00 SHIFT_"}, {"codigo": "10113", "desc": "09:00 a 17:00 SHIFT_"}, {"codigo": "10117", "desc": "09:00 a 15:30 SHIFT"}, {"codigo": "10182", "desc": "09:00 a 13:30 SHIFT_"}, {"codigo": "10199", "desc": "09:00 a 15:00 SHIFT"}, {"codigo": "10253", "desc": "09:00 a 12:00 SHIFT_"}, {"codigo": "10257", "desc": "09:00 a 12:30 SHIFT_"}, {"codigo": "10312", "desc": "09:00 a 13:45 SHIFT_"}, {"codigo": "10326", "desc": "09:00 a 13:15 SHIFT_"}, {"codigo": "10357", "desc": "09:00 a 12:15 SHIFT_"}, {"codigo": "10380", "desc": "09:00 a 12:45 SHIFT_"}, {"codigo": "10529", "desc": "09:00 a 15:00 SHIFT_"}, {"codigo": "10598", "desc": "09:00 a 15:30 SHIFT_"}, {"codigo": "10629", "desc": "09:00 a 16:00 SHIFT_"}, {"codigo": "10671", "desc": "09:00 a 11:00"}, {"codigo": "10695", "desc": "09:00 a 14:30 SHIFT_"}, {"codigo": "10702", "desc": "09:00 a 17:00 SHIFT-"}, {"codigo": "10703", "desc": "09:00 a 17:00 SHIFT"}, {"codigo": "10715", "desc": "09:00 a 12:00 SHIFT"}, {"codigo": "271", "desc": "09:30 A 15:30 LACTANCIA"}, {"codigo": "292", "desc": "09:30 a 14:30 LACTANCIA CC"}, {"codigo": "10059", "desc": "09:30 a 18:00 SHIFT_"}, {"codigo": "10063", "desc": "09:30 a 13:30 SHIFT_"}, {"codigo": "10084", "desc": "09:30 a 14:30 SHIFT_"}, {"codigo": "10114", "desc": "09:30 a 17:30 SHIFT_"}, {"codigo": "10118", "desc": "09:30 a 16:00 SHIFT_"}, {"codigo": "10186", "desc": "09:30 a 14:00 SHIFT_"}, {"codigo": "10242", "desc": "09:30 a 12:30 SHIFT_"}, {"codigo": "10262", "desc": "09:30 a 13:00 SHIFT_"}, {"codigo": "10324", "desc": "09:30 a 13:45 SHIFT_"}, {"codigo": "10329", "desc": "09:30 a 14:15 SHIFT_"}, {"codigo": "10355", "desc": "09:30 a 12:45 SHIFT_"}, {"codigo": "10364", "desc": "09:30 a 13:15 SHIFT_"}, {"codigo": "10399", "desc": "09:30 a 15:30 SHIFT_"}, {"codigo": "10467", "desc": "09:30 a 15:00 SHIFT_"}, {"codigo": "10609", "desc": "09:30 a 12:00 SHIFT_"}, {"codigo": "10654", "desc": "09:30 a 16:30 SHIFT_"}, {"codigo": "186", "desc": "10:00 A 16:00 LACTANCIA"}, {"codigo": "10091", "desc": "10:00 a 18:30 SHIFT"}, {"codigo": "10104", "desc": "10:00 a 14:00 SHIFT"}, {"codigo": "10106", "desc": "10:00 a 15:00 SHIFT_"}, {"codigo": "10120", "desc": "10:00 a 18:00 SHIFT_"}, {"codigo": "10121", "desc": "10:00 a 16:30 SHIFT"}, {"codigo": "10127", "desc": "10:00 a 13:00 SHIFT_"}, {"codigo": "10142", "desc": "10:00 a 14:30 SHIFT"}, {"codigo": "10171", "desc": "10:00 a 16:00 SHIFT_"}, {"codigo": "10240", "desc": "10:00 a 13:30 SHIFT_"}, {"codigo": "10281", "desc": "10:00 a 13:45 SHIFT_"}, {"codigo": "10328", "desc": "10:00 a 13:15 SHIFT_"}, {"codigo": "10341", "desc": "10:00 a 14:45 SHIFT_"}, {"codigo": "10368", "desc": "10:00 a 14:15 SHIFT_"}, {"codigo": "10427", "desc": "10:00 a 16:30 SHIFT"}, {"codigo": "10457", "desc": "10:00 a 14:00 SHIFT_"}, {"codigo": "10471", "desc": "10:00 a 16:30 SHIFT"}, {"codigo": "10514", "desc": "10:00 a 16:30 SHIFT_"}, {"codigo": "10586", "desc": "10:00 a 18:30 SHIFT"}, {"codigo": "10644", "desc": "10:00 a 17:00 SHIFT_"}, {"codigo": "10657", "desc": "10:00 a 18:30 SHIFT_"}, {"codigo": "10661", "desc": "10:00 a 14:30 SHIFT_"}, {"codigo": "10679", "desc": "10:00 a 12:00 SHIFT"}, {"codigo": "10682", "desc": "10:00 a 15:30 SHIFT_"}, {"codigo": "10060", "desc": "10:30 a 19:00 SHIFT_"}, {"codigo": "10093", "desc": "10:30 a 14:30 SHIFT_"}, {"codigo": "10139", "desc": "10:30 a 15:30 SHIFT_"}, {"codigo": "10178", "desc": "10:30 a 17:00 SHIFT_"}, {"codigo": "10197", "desc": "10:30 a 15:00 SHIFT_"}, {"codigo": "10255", "desc": "10:30 a 18:30 SHIFT_"}, {"codigo": "10256", "desc": "10:30 a 14:00 SHIFT_"}, {"codigo": "10259", "desc": "10:30 a 13:30 SHIFT_"}, {"codigo": "10279", "desc": "10:30 a 13:00 SHIFT_"}, {"codigo": "10343", "desc": "10:30 a 13:45 SHIFT_"}, {"codigo": "10360", "desc": "10:30 a 15:15 SHIFT_"}, {"codigo": "10376", "desc": "10:30 a 14:15 SHIFT_"}, {"codigo": "10398", "desc": "10:30 a 16:30 SHIFT_"}, {"codigo": "10400", "desc": "10:30 a 16:00 SHIFT_"}, {"codigo": "187", "desc": "11:00 A 17:00 LACTANCIA"}, {"codigo": "606", "desc": "11:00 a 17:00 FERIADO SHIFT"}, {"codigo": "10061", "desc": "11:00 a 19:30 SHIFT_"}, {"codigo": "10075", "desc": "11:00 a 15:00 SHIFT_"}, {"codigo": "10077", "desc": "11:00 a 16:00 SHIFT_"}, {"codigo": "10112", "desc": "11:00 a 19:00 SHIFT_"}, {"codigo": "10144", "desc": "11:00 a 14:30 SHIFT_"}, {"codigo": "10149", "desc": "11:00 a 15:30 SHIFT_"}, {"codigo": "10153", "desc": "11:00 a 17:30 SHIFT_"}, {"codigo": "10221", "desc": "11:00 a 14:00 SHIFT_"}, {"codigo": "10235", "desc": "11:00 a 17:00 SHIFT_"}, {"codigo": "10314", "desc": "11:00 a 14:15 SHIFT_"}, {"codigo": "10331", "desc": "11:00 a 14:45 SHIFT_"}, {"codigo": "10345", "desc": "11:00 a 15:45 SHIFT_"}, {"codigo": "10374", "desc": "11:00 a 15:15 SHIFT_"}, {"codigo": "10608", "desc": "11:00 a 13:00 SHIFT_"}, {"codigo": "10684", "desc": "11:00 a 16:30 SHIFT_"}, {"codigo": "10732", "desc": "11:00 a 18:00 SHIFT_"}, {"codigo": "296", "desc": "11:30 a 21:30 LACTANCIA CC"}, {"codigo": "329", "desc": "11:30 A 16:30 LACTANCIA CC"}, {"codigo": "10074", "desc": "11:30 a 20:00 SHIFT_"}, {"codigo": "10110", "desc": "11:30 a 16:30 SHIFT_"}, {"codigo": "10152", "desc": "11:30 a 18:00 SHIFT"}, {"codigo": "10159", "desc": "11:30 a 15:30 SHIFT_"}, {"codigo": "10207", "desc": "11:30 a 16:00 SHIFT_"}, {"codigo": "10210", "desc": "11:30 a 19:30 SHIFT_"}, {"codigo": "10250", "desc": "11:30 a 14:30 SHIFT_"}, {"codigo": "10269", "desc": "11:30 a 15:00 SHIFT_"}, {"codigo": "10353", "desc": "11:30 a 14:45 SHIFT_"}, {"codigo": "10370", "desc": "11:30 a 15:15 SHIFT_"}, {"codigo": "10372", "desc": "11:30 a 15:45 SHIFT_"}, {"codigo": "10395", "desc": "11:30 a 17:30 SHIFT_"}, {"codigo": "10396", "desc": "11:30 a 16:15 SHIFT_"}, {"codigo": "10442", "desc": "11:30 a 18:00 SHIFT_"}, {"codigo": "10722", "desc": "11:30 a 17:00 SHIFT_"}, {"codigo": "188", "desc": "12:00 a 18:00 LACTANCIA"}, {"codigo": "10097", "desc": "12:00 a 16:00 SHIFT_"}, {"codigo": "10101", "desc": "12:00 a 20:30 SHIFT"}, {"codigo": "10115", "desc": "12:00 a 17:00 SHIFT_"}, {"codigo": "10165", "desc": "12:00 a 18:30 SHIFT_"}, {"codigo": "10172", "desc": "12:00 a 18:00 SHIFT_"}, {"codigo": "10173", "desc": "12:00 a 20:00 SHIFT_"}, {"codigo": "10214", "desc": "12:00 a 16:30 SHIFT_"}, {"codigo": "10246", "desc": "12:00 a 15:00 SHIFT_"}, {"codigo": "10248", "desc": "12:00 a 15:30 SHIFT_"}, {"codigo": "10338", "desc": "12:00 a 15:15 SHIFT_"}, {"codigo": "10349", "desc": "12:00 a 16:15 SHIFT_"}, {"codigo": "10351", "desc": "12:00 a 15:45 SHIFT_"}, {"codigo": "10362", "desc": "12:00 a 16:45 SHIFT_"}, {"codigo": "10447", "desc": "12:00 a 20:30 SHIFT_"}, {"codigo": "10632", "desc": "12:00 a 19:00 SHIFT_"}, {"codigo": "10709", "desc": "12:00 a 17:30 SHIFT_"}, {"codigo": "10348", "desc": "12:15 a 17:00 SHIFT_"}, {"codigo": "340", "desc": "12:30 a 19:00 LACTANCIA"}, {"codigo": "10072", "desc": "12:30 a 21:00 SHIFT_"}, {"codigo": "10131", "desc": "12:30 a 19:00 SHIFT_"}, {"codigo": "10174", "desc": "12:30 a 16:30 SHIFT_"}, {"codigo": "10177", "desc": "12:30 a 20:30 SHIFT_"}, {"codigo": "10194", "desc": "12:30 a 16:00 SHIFT_"}, {"codigo": "10264", "desc": "12:30 a 15:30 SHIFT_"}, {"codigo": "10273", "desc": "12:30 a 17:30 SHIFT_"}, {"codigo": "10296", "desc": "12:30 a 17:00 SHIFT_"}, {"codigo": "10391", "desc": "12:30 a 15:45 SHIFT_"}, {"codigo": "10446", "desc": "12:30 a 18:30 SHIFT_"}, {"codigo": "10699", "desc": "12:30 a 19:30 SHIFT_"}, {"codigo": "10390", "desc": "12:45 a 17:00 SHIFT_"}, {"codigo": "189", "desc": "13:00 a 19:00 LACTANCIA"}, {"codigo": "10103", "desc": "13:00 a 19:30 SHIFT_"}, {"codigo": "10122", "desc": "13:00 a 17:00 SHIFT_"}, {"codigo": "10125", "desc": "13:00 a 21:30 SHIFT_"}, {"codigo": "10146", "desc": "13:00 a 18:00 SHIFT"}, {"codigo": "10167", "desc": "13:00 a 21:00 SHIFT"}, {"codigo": "10220", "desc": "13:00 a 16:00 SHIFT_"}, {"codigo": "10268", "desc": "13:00 a 17:30 SHIFT"}, {"codigo": "10285", "desc": "13:00 a 17:15 SHIFT_"}, {"codigo": "10287", "desc": "13:00 a 19:00 SHIFT_"}, {"codigo": "10302", "desc": "13:00 a 16:30 SHIFT_"}, {"codigo": "10384", "desc": "13:00 a 16:15 SHIFT"}, {"codigo": "10424", "desc": "13:00 a 21:00 SHIFT_"}, {"codigo": "10440", "desc": "13:00 a 18:00 SHIFT_"}, {"codigo": "10599", "desc": "13:00 a 17:30 SHIFT_"}, {"codigo": "10714", "desc": "13:00 a 20:00 SHIFT"}, {"codigo": "10334", "desc": "13:15 a 17:00 SHIFT_"}, {"codigo": "10340", "desc": "13:15 a 18:00 SHIFT_"}, {"codigo": "10387", "desc": "13:15 a 17:30 SHIFT_"}, {"codigo": "10087", "desc": "13:30 a 22:00 SHIFT_"}, {"codigo": "10092", "desc": "13:30 a 20:00 SHIFT_"}, {"codigo": "10156", "desc": "13:30 a 17:00 SHIFT_"}, {"codigo": "10196", "desc": "13:30 a 17:30 SHIFT_"}, {"codigo": "10237", "desc": "13:30 a 18:00 SHIFT_"}, {"codigo": "10239", "desc": "13:30 a 18:30 SHIFT_"}, {"codigo": "10288", "desc": "13:30 a 21:30 SHIFT_"}, {"codigo": "10290", "desc": "13:30 a 16:30 SHIFT"}, {"codigo": "10308", "desc": "13:30 a 19:30 SHIFT_"}, {"codigo": "10600", "desc": "13:30 a 16:30 SHIFT_"}, {"codigo": "10717", "desc": "13:30 a 19:00 SHIFT_"}, {"codigo": "10275", "desc": "13:45 a 17:00 SHIFT_"}, {"codigo": "10317", "desc": "13:45 a 18:00 SHIFT_"}, {"codigo": "10321", "desc": "13:45 a 18:30 SHIFT_"}, {"codigo": "191", "desc": "14:00 A 20:00 LACTANCIA"}, {"codigo": "297", "desc": "14:00 a 24:00 LACTANCIA CC"}, {"codigo": "10067", "desc": "14:00 a 18:00 SHIFT_"}, {"codigo": "10088", "desc": "14:00 a 22:30 SHIFT_"}, {"codigo": "10100", "desc": "14:00 a 17:00 SHIFT"}, {"codigo": "10151", "desc": "14:00 a 20:30 SHIFT_"}, {"codigo": "10176", "desc": "14:00 a 22:00 SHIFT_"}, {"codigo": "10213", "desc": "14:00 a 17:30 SHIFT_"}, {"codigo": "10226", "desc": "14:00 a 20:00 SHIFT_"}, {"codigo": "10245", "desc": "14:00 a 18:30 SHIFT"}, {"codigo": "10261", "desc": "14:00 a 19:00 SHIFT_"}, {"codigo": "10406", "desc": "14:00 a 16:00 SHIFT_"}, {"codigo": "10596", "desc": "14:00 a 18:30 SHIFT_"}, {"codigo": "10610", "desc": "14:00 a 19:30 SHIFT_"}, {"codigo": "10631", "desc": "14:00 a 17:00 SHIFT_"}, {"codigo": "10641", "desc": "14:00 a 17:00 SHIFT"}, {"codigo": "10674", "desc": "14:00 a 21:00 SHIFT_"}, {"codigo": "10719", "desc": "14:00 a 16:30 SHIFT_"}, {"codigo": "10319", "desc": "14:15 a 18:00 SHIFT_"}, {"codigo": "10358", "desc": "14:15 a 19:00 SHIFT_"}, {"codigo": "10367", "desc": "14:15 a 18:30 SHIFT_"}, {"codigo": "10379", "desc": "14:15 a 17:30 SHIFT_"}, {"codigo": "192", "desc": "14:30 A 20:30 LACTANCIA"}, {"codigo": "10080", "desc": "14:30 a 17:30 SHIFT_"}, {"codigo": "10086", "desc": "14:30 a 23:00 SHIFT_"}, {"codigo": "10102", "desc": "14:30 a 21:00 SHIFT_"}, {"codigo": "10109", "desc": "14:30 a 18:30 SHIFT_"}, {"codigo": "10134", "desc": "14:30 a 18:00 SHIFT"}, {"codigo": "10166", "desc": "14:30 a 22:30 SHIFT_"}, {"codigo": "10227", "desc": "14:30 a 20:30 SHIFT_"}, {"codigo": "10243", "desc": "14:30 a 19:30 SHIFT_"}, {"codigo": "10258", "desc": "14:30 a 19:00 SHIFT"}, {"codigo": "10612", "desc": "14:30 a 18:00 SHIFT_"}, {"codigo": "10614", "desc": "14:30 a 19:00 SHIFT_"}, {"codigo": "10652", "desc": "14:30 a 23:00 SHIFT-"}, {"codigo": "10691", "desc": "14:30 a 17:00 SHIFT_"}, {"codigo": "10711", "desc": "14:30 a 16:30 SHIFT_"}, {"codigo": "10723", "desc": "14:30 a 21:30 SHIFT_"}, {"codigo": "10130", "desc": "14:45 a 18:00 SHIFT_"}, {"codigo": "10356", "desc": "14:45 a 19:30 SHIFT_"}, {"codigo": "10381", "desc": "14:45 a 19:00 SHIFT_"}, {"codigo": "246", "desc": "15:00 a 21:00 LACTANCIA"}, {"codigo": "10071", "desc": "15:00 a 18:00 SHIFT"}, {"codigo": "10082", "desc": "15:00 a 19:00 SHIFT_"}, {"codigo": "10128", "desc": "15:00 a 20:00 SHIFT_"}, {"codigo": "10154", "desc": "15:00 a 23:30 SHIFT"}, {"codigo": "10170", "desc": "15:00 a 21:00 SHIFT_"}, {"codigo": "10179", "desc": "15:00 a 21:30 SHIFT_"}, {"codigo": "10185", "desc": "15:00 a 18:30 SHIFT_"}, {"codigo": "10209", "desc": "15:00 a 23:00 SHIFT_"}, {"codigo": "10263", "desc": "15:00 a 19:30 SHIFT"}, {"codigo": "10280", "desc": "15:00 a 20:30 SHIFT_"}, {"codigo": "10445", "desc": "15:00 a 23:30 SHIFT"}, {"codigo": "10465", "desc": "15:00 a 17:30 SHIFT"}, {"codigo": "10537", "desc": "15:00 a 23:30 SHIFT_"}, {"codigo": "10606", "desc": "15:00 a 18:00 SHIFT"}, {"codigo": "10615", "desc": "15:00 a 19:30 SHIFT_"}, {"codigo": "10653", "desc": "15:00 a 17:00 SHIFT_"}, {"codigo": "10676", "desc": "15:00 a 22:00 SHIFT_"}, {"codigo": "10697", "desc": "15:00 a 17:30 SHIFT_"}, {"codigo": "10726", "desc": "15:00 a 18:00 SHIFT_"}, {"codigo": "10729", "desc": "15:00 a 17:00 - SHIFT"}, {"codigo": "10323", "desc": "15:15 a 20:00 SHIFT_"}, {"codigo": "10327", "desc": "15:15 a 19:00 SHIFT_"}, {"codigo": "10337", "desc": "15:15 a 18:30 SHIFT_"}, {"codigo": "10365", "desc": "15:15 a 19:30 SHIFT_"}, {"codigo": "269", "desc": "15:30 A 03:00 INVENTARIOS"}, {"codigo": "10064", "desc": "15:30 a 19:30 SHIFT_"}, {"codigo": "10090", "desc": "15:30 a 18:30 SHIFT_"}, {"codigo": "10124", "desc": "15:30 a 22:00 SHIFT_"}, {"codigo": "10183", "desc": "15:30 a 19:00 SHIFT_"}, {"codigo": "10200", "desc": "15:30 a 24:00 SHIFT_"}, {"codigo": "10233", "desc": "15:30 a 23:30 SHIFT_"}, {"codigo": "10241", "desc": "15:30 a 20:00 SHIFT_"}, {"codigo": "10260", "desc": "15:30 a 20:30 SHIFT_"}, {"codigo": "10403", "desc": "15:30 a 18:00 SHIFT"}, {"codigo": "10437", "desc": "15:30 a 21:30 SHIFT_"}, {"codigo": "10673", "desc": "15:30 a 22:30 SHIFT_"}, {"codigo": "10683", "desc": "15:30 a 18:00 SHIFT_"}, {"codigo": "10696", "desc": "15:30 a 17:30 SHIFT_"}, {"codigo": "10282", "desc": "15:45 a 20:00 SHIFT_"}, {"codigo": "10313", "desc": "15:45 a 19:00 SHIFT_"}, {"codigo": "10325", "desc": "15:45 a 19:30 SHIFT_"}, {"codigo": "10344", "desc": "15:45 a 20:30 SHIFT_"}, {"codigo": "193", "desc": "16:00 A 22:00 LACTANCIA"}, {"codigo": "10069", "desc": "16:00 a 19:00 SHIFT_"}, {"codigo": "10105", "desc": "16:00 a 20:00 SHIFT_"}, {"codigo": "10168", "desc": "16:00 a 22:30 SHIFT_"}, {"codigo": "10187", "desc": "16:00 a 19:30 SHIFT"}, {"codigo": "10222", "desc": "16:00 a 21:00 SHIFT_"}, {"codigo": "10252", "desc": "16:00 a 20:30 SHIFT_"}, {"codigo": "10271", "desc": "16:00 a 00:30 SHIFT"}, {"codigo": "10284", "desc": "16:00 a 18:00 SHIFT"}, {"codigo": "10407", "desc": "16:00 a 22:00 SHIFT_"}, {"codigo": "10456", "desc": "16:00 a 20:00 SHIFT"}, {"codigo": "10547", "desc": "16:00 a 19:30 SHIFT"}, {"codigo": "10553", "desc": "16:00 a 19:30 SHIFT_"}, {"codigo": "10637", "desc": "16:00 a 18:30"}, {"codigo": "10660", "desc": "16:00 a 19:90 SHIFT"}, {"codigo": "10681", "desc": "16:00 a 18:00 SHIFT_"}, {"codigo": "10687", "desc": "16:00 a 18:30 SHIFT_"}, {"codigo": "10725", "desc": "16:00 a 00:00 SHIFT"}, {"codigo": "10315", "desc": "16:15 a 21:00 SHIFT_"}, {"codigo": "10330", "desc": "16:15 a 19:30 SHIFT_"}, {"codigo": "10369", "desc": "16:15 a 20:00 SHIFT_"}, {"codigo": "10377", "desc": "16:15 a 20:30 SHIFT_"}, {"codigo": "293", "desc": "16:30 a 21:30 LACTANCIA CC"}, {"codigo": "10085", "desc": "16:30 a 19:30 SHIFT_"}, {"codigo": "10094", "desc": "16:30 a 20:30 SHIFT_"}, {"codigo": "10119", "desc": "16:30 a 23:00 SHIFT_"}, {"codigo": "10143", "desc": "16:30 a 20:00 SHIFT_"}, {"codigo": "10145", "desc": "16:30 a 21:00 SHIFT_"}, {"codigo": "10251", "desc": "16:30 a 21:30 SHIFT_"}, {"codigo": "10283", "desc": "16:30 a 01:00 SHIFT_"}, {"codigo": "10581", "desc": "16:30 a 00:30"}, {"codigo": "10633", "desc": "16:30 a 00:30 SHIFT_"}, {"codigo": "10636", "desc": "16:30 a 18:00"}, {"codigo": "10669", "desc": "16:30 a 22:30 SHIFT_"}, {"codigo": "10692", "desc": "16:30 a 18:30 SHIFT_"}, {"codigo": "10693", "desc": "16:30 a 19:00 SHIFT_"}, {"codigo": "10704", "desc": "16:30 a 20:30 SHIFT-"}, {"codigo": "10332", "desc": "16:45 a 21:00 SHIFT_"}, {"codigo": "10342", "desc": "16:45 a 20:00 SHIFT_"}, {"codigo": "10354", "desc": "16:45 a 21:30 SHIFT_"}, {"codigo": "10383", "desc": "16:45 a 20:30 SHIFT_"}, {"codigo": "228", "desc": "17:00 A 19:00 JP LACTANCIA"}, {"codigo": "275", "desc": "17:00 a 23:00 LACTANCIA"}, {"codigo": "324", "desc": "17:00 a 22:00 LACTANCIA CC"}, {"codigo": "332", "desc": "17:00 a 23:00 LACTANCIA CC"}, {"codigo": "10076", "desc": "17:00 a 21:00 SHIFT_"}, {"codigo": "10107", "desc": "17:00 a 20:00 SHIFT_"}, {"codigo": "10198", "desc": "17:00 a 20:30 SHIFT_"}, {"codigo": "10216", "desc": "17:00 a 23:30 SHIFT_"}, {"codigo": "10234", "desc": "17:00 a 22:00 SHIFT_"}, {"codigo": "10270", "desc": "17:00 a 21:30 SHIFT_"}, {"codigo": "10277", "desc": "17:00 a 01:00 SHIFT"}, {"codigo": "10293", "desc": "17:00 a 19:00 SHIFT"}, {"codigo": "10449", "desc": "17:00 a 23:00 SHIFT_"}, {"codigo": "10468", "desc": "17:00 a 19:30 SHIFT_"}, {"codigo": "10563", "desc": "17:00 a 01:00 SHIFT_"}, {"codigo": "10568", "desc": "17:00 a 01:30 SHIFT_"}, {"codigo": "10617", "desc": "17:00 a 19:00 SHIFT_"}, {"codigo": "10645", "desc": "17:00 a 00:00 SHIFT"}, {"codigo": "10339", "desc": "17:15 a 22:00 SHIFT_"}, {"codigo": "10361", "desc": "17:15 a 20:30 SHIFT_"}, {"codigo": "10371", "desc": "17:15 a 21:30 SHIFT_"}, {"codigo": "10375", "desc": "17:15 a 21:00 SHIFT_"}, {"codigo": "318", "desc": "17:30 A 23:30 LACTANCIA"}, {"codigo": "10140", "desc": "17:30 a 20:30 SHIFT_"}, {"codigo": "10150", "desc": "17:30 a 21:00 SHIFT_"}, {"codigo": "10160", "desc": "17:30 a 21:30 SHIFT_"}, {"codigo": "10249", "desc": "17:30 a 22:00 SHIFT_"}, {"codigo": "10265", "desc": "17:30 a 22:30 SHIFT_"}, {"codigo": "10454", "desc": "17:30 a 23:30 SHIFT_"}, {"codigo": "10576", "desc": "17:30 a 01:30"}, {"codigo": "10620", "desc": "17:30 a 01:30 SHIFT_"}, {"codigo": "10643", "desc": "17:30 a 19:00 SHIFT_"}, {"codigo": "10651", "desc": "17:30 a 20:00 SHIFT_"}, {"codigo": "10694", "desc": "17:30 a 19:30 SHIFT_"}, {"codigo": "10346", "desc": "17:45 a 21:00 SHIFT_"}, {"codigo": "10352", "desc": "17:45 a 22:00 SHIFT_"}, {"codigo": "10373", "desc": "17:45 a 21:30 SHIFT_"}, {"codigo": "10392", "desc": "17:45 a 22:30 SHIFT_"}, {"codigo": "217", "desc": "18:00 a 02:00 ARCSA"}, {"codigo": "227", "desc": "18:00 A 20:00 JP LACTANCIA"}, {"codigo": "247", "desc": "18:00 a 24:00 LACTANCIA"}, {"codigo": "294", "desc": "18:00 a 23:00 LACTANCIA CC"}, {"codigo": "10078", "desc": "18:00 a 21:00 SHIFT_"}, {"codigo": "10098", "desc": "18:00 a 22:00 SHIFT_"}, {"codigo": "10208", "desc": "18:00 a 21:30 SHIFT_"}, {"codigo": "10247", "desc": "18:00 a 23:00 SHIFT_"}, {"codigo": "10278", "desc": "18:00 a 00:30 SHIFT"}, {"codigo": "10292", "desc": "18:00 a 20:00 SHIFT_"}, {"codigo": "10305", "desc": "18:00 a 22:30 SHIFT_"}, {"codigo": "10401", "desc": "18:00 a 20:30 SHIFT_"}, {"codigo": "10562", "desc": "18:00 a 02:00 SHIFT_"}, {"codigo": "10670", "desc": "18:00 a 23:00 SHIFT"}, {"codigo": "10350", "desc": "18:15 a 22:00 SHIFT_"}, {"codigo": "10385", "desc": "18:15 a 23:00 SHIFT_"}, {"codigo": "10397", "desc": "18:15 a 21:30 SHIFT_"}, {"codigo": "10111", "desc": "18:30 a 21:30 SHIFT_"}, {"codigo": "10175", "desc": "18:30 a 22:30 SHIFT_"}, {"codigo": "10215", "desc": "18:30 a 22:00 SHIFT_"}, {"codigo": "10291", "desc": "18:30 a 23:30 SHIFT_"}, {"codigo": "10299", "desc": "18:30 a 23:00 SHIFT_"}, {"codigo": "10593", "desc": "18:30 a 02:30"}, {"codigo": "10685", "desc": "18:30 a 21:00 SHIFT_"}, {"codigo": "10700", "desc": "18:30 a 20:30 SHIFT_"}, {"codigo": "10363", "desc": "18:45 a 22:00 SHIFT_"}, {"codigo": "244", "desc": "19:00 a 03:00 ARCSA"}, {"codigo": "295", "desc": "19:00 a 24:00 LACTANCIA CC"}, {"codigo": "10116", "desc": "19:00 a 22:00 SHIFT_"}, {"codigo": "10123", "desc": "19:00 a 23:00 SHIFT_"}, {"codigo": "10225", "desc": "19:00 a 03:00 SHIFT"}, {"codigo": "10300", "desc": "19:00 a 22:30 SHIFT_"}, {"codigo": "10408", "desc": "19:00 a 23:30 SHIFT_"}, {"codigo": "10580", "desc": "19:00 a 21:00"}, {"codigo": "10584", "desc": "19:00 a 21:00 SHIFT"}, {"codigo": "10647", "desc": "18:00 a 00:00 SHIFT"}, {"codigo": "10649", "desc": "19:00 a 03:30 SHIFT_"}, {"codigo": "10688", "desc": "19:00 a 21:00 SHIFT_"}, {"codigo": "10707", "desc": "19:00 a 21:30 SHIFT_"}, {"codigo": "10727", "desc": "19:00 a 01:00 LACTANCIA"}, {"codigo": "10286", "desc": "19:15 a 23:00 SHIFT_"}, {"codigo": "10224", "desc": "19:30 a 23:30 SHIFT_"}, {"codigo": "10311", "desc": "19:30 a 23:00 SHIFT_"}, {"codigo": "10359", "desc": "19:30 a 22:30 SHIFT_"}, {"codigo": "10650", "desc": "19:30 a 04:00 SHIFT_"}, {"codigo": "10656", "desc": "19:30 a 23:30 SHIFT"}, {"codigo": "10689", "desc": "19:30 a 22:00 SHIFT_"}, {"codigo": "10701", "desc": "19:30 a 21:30 SHIFT_"}, {"codigo": "270", "desc": "20:00 A 04:00 INVENTARIOS"}, {"codigo": "325", "desc": "20:00 a 01:00 LACTANCIA CC"}, {"codigo": "355", "desc": "20:00 a 22:00 INVENTARIOS"}, {"codigo": "10147", "desc": "20:00 a 23:00 SHIFT"}, {"codigo": "10189", "desc": "20:00 a 04:00 ARCSA"}, {"codigo": "10206", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10266", "desc": "20:00 a 23:30 SHIFT"}, {"codigo": "10294", "desc": "20:00 a 23:00 SHIFT_"}, {"codigo": "10433", "desc": "20:00 a 04:30 SHIFT"}, {"codigo": "10460", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10462", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10473", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10483", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10484", "desc": "20:00 a 22:00 SHIFT_"}, {"codigo": "10490", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10493", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10497", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10501", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10508", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10513", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10520", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10525", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10533", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10541", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10546", "desc": "20:00 a 00:00 SHIFT"}, {"codigo": "10552", "desc": "20:00 a 04:00 SHIFT"}, {"codigo": "10558", "desc": "20:00 a 04:00 SHIFT_"}, {"codigo": "10594", "desc": "20:00 a 23:30 SHIFT"}, {"codigo": "10623", "desc": "20:00 a 01:00 SHIFT"}, {"codigo": "10626", "desc": "20:00 a 04:30 SHIFT_"}, {"codigo": "10655", "desc": "20:00 a 23:30 SHIFT_"}, {"codigo": "10705", "desc": "20:00 a 22:30 SHIFT_"}, {"codigo": "10712", "desc": "20:00 a 01:00 SHIFT"}, {"codigo": "10425", "desc": "20:30 a 04:30 SHIFT"}, {"codigo": "10430", "desc": "20:30 a 23:30 SHIFT"}, {"codigo": "10475", "desc": "20:30 a 23:30 SHIFT_"}, {"codigo": "10571", "desc": "20:30 a 04:30 SHIFT"}, {"codigo": "10573", "desc": "20:30 a 01:30 SHIFT"}, {"codigo": "10602", "desc": "20:30 a 01:30 SHIFT_"}, {"codigo": "10663", "desc": "20:30 a 05:00 SHIFT_"}, {"codigo": "10698", "desc": "20:30 a 22:30 SHIFT_"}, {"codigo": "268", "desc": "21:00 A 05:00 INVENTARIOS"}, {"codigo": "348", "desc": "21:00 A 01:00 JP INVENTARIOS"}, {"codigo": "10205", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10298", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10307", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10310", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10404", "desc": "21:00 a 23:00 SHIFT_"}, {"codigo": "10418", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10435", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10461", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10470", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10472", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10485", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10489", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10492", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10496", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10500", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10504", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10507", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10509", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10512", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10515", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10519", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10524", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10532", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10534", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10540", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10542", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10545", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10548", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10551", "desc": "21:00 a 05:00 SHIFT"}, {"codigo": "10554", "desc": "21:00 a 05:30 SHIFT"}, {"codigo": "10557", "desc": "21:00 a 05:00 SHIFT_"}, {"codigo": "10559", "desc": "21:00 a 05:30 SHIFT_"}, {"codigo": "10574", "desc": "21:00 a 01:30 SHIFT"}, {"codigo": "10601", "desc": "21:00 a 01:30 SHIFT_"}, {"codigo": "10622", "desc": "21:00 a 01:00 SHIFT_"}, {"codigo": "10634", "desc": "21:00 a 00:30 SHIFT_"}, {"codigo": "10667", "desc": "21:00 a 01:00 SHIFT"}, {"codigo": "10680", "desc": "21:00 a 03:00 SHIFT"}, {"codigo": "10718", "desc": "21:00 a 23:30 SHIFT_"}, {"codigo": "10721", "desc": "21:00 a 02:00 SHIFT_"}, {"codigo": "10731", "desc": "21:00 a 03:00 SHIFT_"}, {"codigo": "10304", "desc": "21:30 a 06:00 SHIFT_"}, {"codigo": "10388", "desc": "21:30 a 05:30 SHIFT"}, {"codigo": "10585", "desc": "21:30 a 05:30 SHIFT_"}, {"codigo": "10618", "desc": "21:30 a 01:30 SHIFT_"}, {"codigo": "346", "desc": "22:00 a 06:00 INVENTARIOS"}, {"codigo": "349", "desc": "22:00 A 02:00 JP INVENTARIOS"}, {"codigo": "10203", "desc": "22:00 a 06:30 SHIFT_"}, {"codigo": "10204", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10414", "desc": "22:00 a 04:00 SHIFT"}, {"codigo": "10419", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10422", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10428", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10432", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10444", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10448", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10453", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10463", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10474", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10487", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10491", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10495", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10499", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10503", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10511", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10518", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10523", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10528", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10535", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10543", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10550", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10556", "desc": "22:00 a 06:00 SHIFT"}, {"codigo": "10561", "desc": "22:00 a 06:00 SHIFT_"}, {"codigo": "10569", "desc": "22:00 a 01:30 SHIFT_"}, {"codigo": "10575", "desc": "22:00 a 01:00 SHIFT"}, {"codigo": "10597", "desc": "22:00 a 04:00 SHIFT_"}, {"codigo": "10603", "desc": "22:00 a 01:00 SHIFT_"}, {"codigo": "10621", "desc": "22:00 a 02:00 SHIFT"}, {"codigo": "10720", "desc": "22:00 a 02:00 SHIFT_"}, {"codigo": "10564", "desc": "22:30 a 06:30 SHIFT_"}, {"codigo": "10588", "desc": "22:30 a 04:30"}, {"codigo": "10619", "desc": "22:30 a 01:30 SHIFT_"}, {"codigo": "10627", "desc": "22:30 a 07:00 SHIFT_"}, {"codigo": "347", "desc": "23:00 a 07:00 INVENTARIOS"}, {"codigo": "10202", "desc": "23:00 a 07:30 SHIFT"}, {"codigo": "10301", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10393", "desc": "23:00 a 03:00 SHIFT"}, {"codigo": "10477", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10478", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10481", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10486", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10488", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10494", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10498", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10502", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10506", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10516", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10521", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10526", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10530", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10538", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10549", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10555", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10560", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10570", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10578", "desc": "23:00 a 07:00 SHIFT"}, {"codigo": "10582", "desc": "23:00 a 07:00 SHIFT_"}, {"codigo": "10616", "desc": "23:00 a 05:00 SHIFT_"}, {"codigo": "10664", "desc": "23:00 a 07:30 SHIFT_"}, {"codigo": "10733", "desc": "23:00 a 01:00 SHIFT_"}, {"codigo": "10254", "desc": "23:30 a 07:30 SHIFT_"}, {"codigo": "10413", "desc": "23:30 a 06:00 SHIFT"}, {"codigo": "10417", "desc": "23:30 a 07:30 SHIFT"}, {"codigo": "10628", "desc": "23:30 a 08:00 SHIFT_"}, {"codigo": "10708", "desc": "23:30 a 01:30 SHIFT_"}, {"codigo": "298", "desc": "00:00 a 08:00 SHIFT"}, {"codigo": "10672", "desc": "00:00 a 08:00 Prueba"}];
+
+        // Biométrika Cloud Services: portal para subir/consultar turnos por sucursal.
+        // NOTA: el token 'tkn' se dejó fijo. Si Biométrika lo rota o caduca, actualízalo aquí.
+        const BIOMETRICO_BASE_URL = 'https://www.d2servicios.com/d2webFYBECA/gnr/turnosxlsx.aspx';
+        const BIOMETRICO_TOKEN = '503396E074A1789A0F90B2CD44F31503E722';
+
+        const empleadosDefecto = [
+            { cedula: "0922034145", nombre: "ARREAGA LABORDE CINTHIA VICTORIA" },
+            { cedula: "0952246973", nombre: "BOLAÑOS LAJONES AMARA GIOVANA" },
+            { cedula: "0951529742", nombre: "COELLO VARGAS LISBETH YAMILEC" },
+            { cedula: "0921266268", nombre: "OLIVO CABRERA ERIK OSWALDO" }
+        ];
+
+        const listaColoresDisponibles = [
+            { id: 'bg-pastel-blue', label: 'Azul Brillante', class: 'bg-pastel-blue' },
+            { id: 'bg-pastel-pink', label: 'Rosa Fucsia', class: 'bg-pastel-pink' },
+            { id: 'bg-pastel-yellow', label: 'Amarillo Taxi', class: 'bg-pastel-yellow' },
+            { id: 'bg-pastel-purple', label: 'Violeta', class: 'bg-pastel-purple' },
+            { id: 'bg-pastel-orange', label: 'Naranja', class: 'bg-pastel-orange' },
+            { id: 'bg-pastel-green', label: 'Verde Brillante', class: 'bg-pastel-green' },
+            { id: 'bg-pastel-gray', label: 'Gris Neutro', class: 'bg-pastel-gray' },
+            { id: 'bg-corp-blue', label: 'Azul Rey', class: 'bg-corp-blue' },
+            { id: 'bg-corp-emerald', label: 'Verde Esmeralda', class: 'bg-corp-emerald' },
+            { id: 'bg-corp-amber', label: 'Ámbar Dorado', class: 'bg-corp-amber' },
+            { id: 'bg-corp-rose', label: 'Rojo Coral', class: 'bg-corp-rose' },
+            { id: 'bg-corp-indigo', label: 'Índigo Eléctrico', class: 'bg-corp-indigo' },
+            { id: 'bg-corp-teal', label: 'Turquesa', class: 'bg-corp-teal' },
+            { id: 'bg-corp-slate', label: 'Gris Oscuro', class: 'bg-corp-slate' },
+            { id: 'bg-corp-purple', label: 'Morado Berenjena', class: 'bg-corp-purple' }
+        ];
+
+        // Mapa de valores hex reales para cada clase de color.
+        // Se usa para fijar el color como estilo inline (además de la clase CSS),
+        // garantizando que el color elegido en Favoritos se mantenga exactamente
+        // igual en la malla y en Modo Presentación, sin depender del orden de
+        // las reglas CSS ni de reprocesamientos del DOM (Tailwind CDN, html2canvas, etc.).
+        const COLOR_HEX_MAP = {
+            'bg-pastel-blue':   { bg: '#1E88FF', text: '#ffffff' },
+            'bg-pastel-pink':   { bg: '#FF2D95', text: '#ffffff' },
+            'bg-pastel-yellow': { bg: '#FFD500', text: '#1a1a1a' },
+            'bg-pastel-purple': { bg: '#A335F0', text: '#ffffff' },
+            'bg-pastel-orange': { bg: '#FF7A00', text: '#ffffff' },
+            'bg-pastel-green':  { bg: '#22C55E', text: '#ffffff' },
+            'bg-pastel-gray':   { bg: '#94A3B8', text: '#0f172a' },
+            'bg-corp-blue':     { bg: '#0044CC', text: '#ffffff' },
+            'bg-corp-emerald':  { bg: '#00875A', text: '#ffffff' },
+            'bg-corp-amber':    { bg: '#E6A800', text: '#1a1a1a' },
+            'bg-corp-rose':     { bg: '#E4003A', text: '#ffffff' },
+            'bg-corp-indigo':   { bg: '#3D2FFF', text: '#ffffff' },
+            'bg-corp-teal':     { bg: '#00BFAE', text: '#052e2b' },
+            'bg-corp-slate':    { bg: '#334155', text: '#ffffff' },
+            'bg-corp-purple':   { bg: '#7A0BC0', text: '#ffffff' },
+            'bg-white':         { bg: '#ffffff', text: '#1f2937' }
+        };
+
+        function aplicarColorInline(el, colorCls) {
+            const c = COLOR_HEX_MAP[colorCls] || COLOR_HEX_MAP['bg-white'];
+            el.style.setProperty('background-color', c.bg, 'important');
+            el.style.setProperty('color', c.text, 'important');
+        }
+
+        let empleados = JSON.parse(localStorage.getItem('farmacia_empleados_v10')) || empleadosDefecto;
+        
+        function guardarEmpleadosStorage() {
+            localStorage.setItem('farmacia_empleados_v10', JSON.stringify(empleados));
+        }
+
+        // Configuración unificada (Sucursal + Tareas por Color)
+        let configGlobal = JSON.parse(localStorage.getItem('farmacia_config_v10')) || {
+            sucursal: "SUCURSAL NO DEFINIDA",
+            colorTasks: {}
+        };
+
+        let historialMallas = JSON.parse(localStorage.getItem('farmacia_historial_v10')) || {};
+
+        let favoritosRaw = JSON.parse(localStorage.getItem('favoritos_turnos')) || [];
+        let favoritos = favoritosRaw.map(f => {
+            if (typeof f === 'string') {
+                const turno = turnosDB.find(t => t.codigo === f || t.desc === f);
+                return {
+                    id: f, codigo: turno ? turno.codigo : f, baseDesc: turno ? turno.desc : f, desc: turno ? turno.desc : f, horasExtras: "0", colorCls: 'bg-pastel-blue'
+                };
+            }
+            if(!f.colorCls) f.colorCls = 'bg-pastel-blue';
+            return f;
+        });
+
+        let currentTemplateBuffer = null; 
+
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebar-overlay');
+        const btnToggle = document.getElementById('btn-toggle-sidebar');
+        const btnClose = document.getElementById('btn-close-sidebar');
+        const btnToolsToggle = document.getElementById('btn-tools-toggle');
+        const toolsDropdown = document.getElementById('tools-dropdown');
+        const toolsArrow = document.getElementById('tools-arrow');
+
+        btnToolsToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toolsDropdown.classList.toggle('hidden');
+            toolsArrow.style.transform = toolsDropdown.classList.contains('hidden') ? 'rotate(0deg)' : 'rotate(180deg)';
+        });
+
+        document.addEventListener('click', (e) => {
+            if(!toolsDropdown.contains(e.target) && e.target !== btnToolsToggle) {
+                toolsDropdown.classList.add('hidden');
+                toolsArrow.style.transform = 'rotate(0deg)';
+            }
+        });
+
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('open');
+        }
+
+        btnToggle.addEventListener('click', () => {
+            toolsDropdown.classList.add('hidden');
+            toolsArrow.style.transform = 'rotate(0deg)';
+            toggleSidebar();
+        });
+        btnClose.addEventListener('click', toggleSidebar);
+        overlay.addEventListener('click', toggleSidebar);
+
+        function obtenerNombreCorto(nombreCompleto) {
+            const capitalizar = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+            const partes = nombreCompleto.trim().split(/\s+/).filter(Boolean);
+            if (partes.length >= 3) {
+                return capitalizar(partes[2]) + " " + capitalizar(partes[0]);
+            }
+            if (partes.length === 2) {
+                return capitalizar(partes[1]) + " " + capitalizar(partes[0]);
+            }
+            if (partes.length === 1) {
+                return capitalizar(partes[0]);
+            }
+            return nombreCompleto;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                const charData = atob(b64Template).split('').map(x => x.charCodeAt(0));
+                const binData = new Uint8Array(charData);
+                currentTemplateBuffer = pako.inflate(binData).buffer;
+            } catch(e) { console.error("Error descomprimiendo plantilla", e); }
+
+            renderizarListaTurnos(turnosDB);
+            renderizarGrid();
+            renderizarFavoritos();
+            configurarZonasBasura();
+            
+            let hoy = new Date();
+            let dia = hoy.getDay();
+            let diff = hoy.getDate() - dia + (dia === 0 ? -6 : 1); 
+            let lunes = new Date(hoy.setDate(diff));
+            
+            let isoLunes = (new Date(lunes.getTime() - lunes.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+            document.getElementById('monday-date').value = isoLunes;
+            actualizarFechas(lunes);
+            
+            cargarSemanaActualSiExiste(isoLunes);
+        });
+
+        document.addEventListener('dragend', (e) => {
+            if(dragSourceElement) {
+                dragSourceElement.style.display = ''; 
+                dragSourceElement.style.opacity = '1';
+            }
+            dragSourceElement = null;
+            dragSourceCell = null;
+            draggedData = null;
+            document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+            detenerAutoScroll();
+        });
+
+        // --- AUTO-SCROLL AL ARRASTRAR CERCA DEL BORDE ---
+        // Útil sobre todo en móvil: si arrastras un turno hacia abajo/arriba de la
+        // pantalla, esta se desplaza sola para que puedas soltarlo en un colaborador
+        // que no estaba visible, sin necesitar el dedo libre para hacer scroll.
+        let autoScrollRAF = null;
+        let autoScrollDireccion = 0; // -1 arriba, 0 quieto, 1 abajo
+        const AUTO_SCROLL_MARGEN = 70; // px desde el borde donde empieza a activarse
+        const AUTO_SCROLL_VELOCIDAD = 14; // px por frame
+
+        function pasoAutoScroll() {
+            if (autoScrollDireccion !== 0) {
+                window.scrollBy(0, autoScrollDireccion * AUTO_SCROLL_VELOCIDAD);
+                autoScrollRAF = requestAnimationFrame(pasoAutoScroll);
+            } else {
+                autoScrollRAF = null;
+            }
+        }
+
+        function detenerAutoScroll() {
+            autoScrollDireccion = 0;
+            if (autoScrollRAF) {
+                cancelAnimationFrame(autoScrollRAF);
+                autoScrollRAF = null;
+            }
+        }
+
+        document.addEventListener('dragover', (e) => {
+            if (!dragSourceElement && !draggedData) { detenerAutoScroll(); return; }
+            const y = e.clientY;
+            if (y == null || y === 0) return; // algunos navegadores mandan 0 en el primer evento
+            const alto = window.innerHeight;
+            if (y < AUTO_SCROLL_MARGEN) {
+                autoScrollDireccion = -1;
+            } else if (y > alto - AUTO_SCROLL_MARGEN) {
+                autoScrollDireccion = 1;
+            } else {
+                autoScrollDireccion = 0;
+            }
+            if (autoScrollDireccion !== 0 && !autoScrollRAF) {
+                autoScrollRAF = requestAnimationFrame(pasoAutoScroll);
+            }
+        });
+
+        function esCedulaValida(valor) {
+            const soloDigitos = (valor || '').toString().trim();
+            return /^\d{10}$/.test(soloDigitos) || /^\d{13}$/.test(soloDigitos);
+        }
+
+        function normalizarCedula(valor) {
+            let v = (valor || '').toString().trim();
+            v = v.replace(/\.0$/, ''); 
+            if (/^\d+$/.test(v) && v.length < 10) {
+                v = v.padStart(10, '0'); 
+            }
+            return v;
+        }
+
+        function extraerEmpleadosDesdeFilas(filas) {
+            const nuevosEmpleados = [];
+            filas.forEach(fila => {
+                let ced = fila[0] !== undefined && fila[0] !== null ? fila[0].toString().trim() : '';
+                let nom = fila[1] !== undefined && fila[1] !== null ? fila[1].toString().trim() : '';
+                ced = normalizarCedula(ced);
+                if (esCedulaValida(ced) && nom) {
+                    nuevosEmpleados.push({ cedula: ced, nombre: nom });
+                }
+            });
+            return nuevosEmpleados;
+        }
+
+        async function parsearArchivoPersonal(arrayBuffer) {
+            try {
+                const workbook = new ExcelJS.Workbook();
+                await workbook.xlsx.load(arrayBuffer.slice(0));
+                const worksheet = workbook.worksheets[0];
+                const filas = [];
+                worksheet.eachRow((row) => {
+                    const cedCell = row.getCell(1);
+                    const nomCell = row.getCell(2);
+                    const cedVal = cedCell.text || (cedCell.value != null ? cedCell.value.toString() : '');
+                    const nomVal = nomCell.text || (nomCell.value != null ? nomCell.value.toString() : '');
+                    filas.push([cedVal, nomVal]);
+                });
+                const empleadosExcelJS = extraerEmpleadosDesdeFilas(filas);
+                if (empleadosExcelJS.length > 0) return empleadosExcelJS;
+            } catch (e) { console.warn('Intento con SheetJS...', e); }
+
+            try {
+                const wb = XLSX.read(arrayBuffer, { type: 'array', cellText: true });
+                const hoja = wb.Sheets[wb.SheetNames[0]];
+                const filas = XLSX.utils.sheet_to_json(hoja, { header: 1, raw: false, defval: '' });
+                return extraerEmpleadosDesdeFilas(filas);
+            } catch (e2) { throw e2; }
+        }
+
+        document.getElementById('upload-staff').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
+            try {
+                Swal.fire({ title: 'Actualizando Personal...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+                const staffArrayBuffer = await file.arrayBuffer();
+                const nuevosEmpleados = await parsearArchivoPersonal(staffArrayBuffer);
+
+                if(nuevosEmpleados.length > 0) {
+                    empleados = nuevosEmpleados;
+                    guardarEmpleadosStorage();
+                    renderizarGrid();
+                    Swal.fire({ icon: 'success', title: 'Personal Actualizado', text: `Se cargaron ${empleados.length} colaboradores y se ha guardado para futuras sesiones.`, confirmButtonColor: '#10b981' });
+                } else {
+                    Swal.fire('Atención', 'No se encontró ninguna cédula válida (10 u 13 dígitos) en el archivo.', 'warning');
+                }
+            } catch (error) {
+                console.error(error);
+                Swal.fire('Error de Lectura', 'El archivo no pudo procesarse.', 'error');
+            }
+            e.target.value = '';
+        });
+
+        document.getElementById('monday-date').addEventListener('change', (e) => {
+            let fecha = new Date(e.target.value + "T12:00:00Z");
+            actualizarFechas(fecha);
+            cargarSemanaActualSiExiste(e.target.value);
+        });
+
+        function actualizarFechas(lunesDate) {
+            const diasIds = ['lunes-label', 'martes-label', 'miercoles-label', 'jueves-label', 'viernes-label', 'sabado-label', 'domingo-label'];
+            for(let i = 0; i < 7; i++) {
+                let d = new Date(lunesDate);
+                d.setDate(lunesDate.getDate() + i);
+                let dayStr = ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2);
+                document.getElementById(diasIds[i]).textContent = dayStr;
+            }
+        }
+
+        const searchInput = document.getElementById('search-shift');
+        searchInput.addEventListener('input', (e) => {
+            const query = e.target.value.trim().toUpperCase();
+            if(!query) {
+                renderizarListaTurnos(turnosDB);
+                return;
+            }
+            const filtrados = turnosDB.filter(t => t.desc.toUpperCase().startsWith(query));
+            renderizarListaTurnos(filtrados);
+        });
+
+        function isNovedad(desc) {
+            return ["LIBRE", "VACACIONES", "PERMISO MÉDICO"].includes(desc.toUpperCase());
+        }
+
+        function getColorPorNovedad(desc) {
+            const d = desc.toUpperCase();
+            if(d === "LIBRE") return 'bg-pastel-green';
+            if(d === "VACACIONES") return 'bg-pastel-yellow';
+            if(d === "PERMISO MÉDICO") return 'bg-pastel-purple';
+            return 'bg-pastel-gray';
+        }
+
+        function limpiarTextoTurno(text) {
+            if(!text) return "";
+            return text.replace(/_?SHIFT_?|-?\s*SHIFT\s*/gi, '').replace(/^[_-\s]+|[_-\s]+$/g, '').trim();
+        }
+
+        function renderizarListaTurnos(lista) {
+            const container = document.getElementById('shifts-list');
+            container.innerHTML = '';
+            lista.forEach(turno => {
+                const idFav = isNovedad(turno.desc) ? turno.desc : turno.codigo;
+                const isFav = esFavorito(idFav);
+                const starColor = isFav ? 'text-yellow-500' : 'text-gray-300 hover:text-yellow-500';
+                let baseColor = isNovedad(turno.desc) ? getColorPorNovedad(turno.desc) : 'bg-white';
+                
+                const textoVisual = isNovedad(turno.desc) ? turno.desc : limpiarTextoTurno(turno.desc);
+
+                const div = document.createElement('div');
+                div.className = `flex justify-between items-center ${baseColor} border border-gray-200 p-2 rounded shadow-sm group`;
+                div.innerHTML = `
+                    <div class="shift-block text-xs font-medium text-gray-700 flex-1 py-1" draggable="true" data-code="${turno.codigo}" data-desc="${turno.desc}">
+                        ${!isNovedad(turno.desc) && turno.codigo ? `<span class="text-gray-400 mr-1">[${turno.codigo}]</span> ` : ''}${textoVisual}
+                    </div>
+                    <button class="ml-2 ${starColor} transition focus:outline-none text-2xl px-3 py-1" onclick="toggleFavorito('${idFav}')">★</button>
+                `;
+                
+                const dragHandle = div.querySelector('.shift-block');
+                dragHandle.addEventListener('dragstart', handleDragStart);
+                container.appendChild(div);
+            });
+        }
+
+        function guardarFavoritosStorage() {
+            localStorage.setItem('favoritos_turnos', JSON.stringify(favoritos));
+        }
+
+        function esFavorito(idFav) {
+            return favoritos.some(f => f.id === idFav);
+        }
+
+        function toggleFavorito(idFav) {
+            const idx = favoritos.findIndex(f => f.id === idFav);
+            if(idx >= 0) {
+                favoritos.splice(idx, 1);
+            } else {
+                const turno = turnosDB.find(t => t.codigo === idFav || t.desc === idFav);
+                if(!turno) return;
+                let cCls = isNovedad(turno.desc) ? getColorPorNovedad(turno.desc) : 'bg-pastel-blue';
+                favoritos.push({
+                    id: idFav, codigo: turno.codigo, baseDesc: turno.desc, desc: turno.desc, horasExtras: "0", colorCls: cCls
+                });
+            }
+            guardarFavoritosStorage();
+            
+            const query = searchInput.value.trim().toUpperCase();
+            let listaActual = turnosDB;
+            if(query) {
+                listaActual = turnosDB.filter(t => t.desc.toUpperCase().startsWith(query));
+            }
+            renderizarListaTurnos(listaActual); 
+            renderizarFavoritos(); 
+        }
+
+        function guardarFavoritoExtendido(turnoExt) {
+            const id = `${turnoExt.codigo}_ext_${turnoExt.horasExtras}`;
+            if(favoritos.some(f => f.id === id)) {
+                Swal.fire({ icon: 'info', title: 'Ya existe', text: 'Este turno extendido ya está en tus Favoritos.', confirmButtonColor: '#10b981' });
+                return;
+            }
+            let cCls = turnoExt.colorCls || 'bg-pastel-orange';
+            favoritos.push({
+                id, codigo: turnoExt.codigo, baseDesc: turnoExt.baseDesc, desc: turnoExt.desc, horasExtras: turnoExt.horasExtras, colorCls: cCls
+            });
+            guardarFavoritosStorage();
+            renderizarFavoritos();
+            Swal.fire({ icon: 'success', title: 'Guardado', text: 'Turno extendido anclado a Favoritos.', confirmButtonColor: '#10b981' });
+        }
+
+        function renderizarFavoritos() {
+            const container = document.getElementById('favorites-container');
+            if(favoritos.length === 0) {
+                container.innerHTML = '<span class="text-sm text-gray-500 italic">Arrastra tus turnos aquí...</span>';
+                return;
+            }
+            container.innerHTML = '';
+            favoritos.forEach(fav => {
+                const isNov = isNovedad(fav.baseDesc);
+                const block = document.createElement('div');
+                const textoVisual = isNov ? fav.baseDesc : limpiarTextoTurno(fav.desc);
+
+                block.className = `shift-block px-2 py-1 md:px-3 md:py-1 rounded text-[11px] md:text-sm border border-gray-400 shadow-sm cursor-pointer max-w-max h-max font-bold ${fav.colorCls || 'bg-white'}`;
+                block.draggable = true;
+                block.dataset.favId = fav.id;
+                block.dataset.code = fav.codigo;
+                block.dataset.desc = fav.desc;
+                block.dataset.baseDesc = fav.baseDesc;
+                block.dataset.horasExtras = fav.horasExtras || "0";
+                block.dataset.colorCls = fav.colorCls;
+                aplicarColorInline(block, fav.colorCls || 'bg-white');
+                block.textContent = textoVisual; 
+
+                block.addEventListener('dragstart', handleDragStart);
+                block.addEventListener('click', (e) => { abrirEdicionFavorito(fav.id, e); });
+                container.appendChild(block);
+            });
+        }
+
+        window.abrirEdicionFavorito = function(idFav, event) {
+            if(event) event.stopPropagation();
+            let fav = favoritos.find(f => f.id === idFav);
+            if(!fav) return;
+
+            let gridColoresHtml = listaColoresDisponibles.map(c => 
+                `<div class="w-7 h-7 rounded cursor-pointer ${c.class} border border-gray-400 shadow-sm hover:scale-110 transition" title="${c.label}" onclick="cambiarColorFav('${idFav}', '${c.id}')"></div>`
+            ).join('');
+
+            Swal.fire({
+                title: 'Editar Favorito',
+                html: `
+                    <div class="mb-4">
+                        <label class="block text-sm mb-2 text-left font-bold text-gray-700">Seleccionar Color Base:</label>
+                        <div class="grid grid-cols-5 gap-2 justify-items-center">
+                            ${gridColoresHtml}
+                        </div>
+                    </div>
+                `,
+                showDenyButton: true,
+                showCancelButton: true,
+                showConfirmButton: false,
+                denyButtonText: '🗑️ Quitar de Favoritos',
+                cancelButtonText: 'Cerrar',
+                denyButtonColor: '#ef4444'
+            }).then((result) => {
+                if (result.isDenied) {
+                    toggleFavorito(idFav);
+                }
+            });
+        };
+
+        window.cambiarColorFav = function(idFav, colorCls) {
+            let fav = favoritos.find(f => f.id === idFav);
+            if(fav) { 
+                fav.colorCls = colorCls; 
+                guardarFavoritosStorage(); 
+                renderizarFavoritos(); 
+            }
+            Swal.close();
+        };
+
+        function renderizarGrid() {
+            const tbody = document.getElementById('grid-body');
+            tbody.innerHTML = '';
+            
+            empleados.forEach((emp, rowIndex) => {
+                const tr = document.createElement('tr');
+                const cebraClass = rowIndex % 2 === 0 ? 'row-even' : 'row-odd';
+                tr.className = `transition employee-row ${cebraClass}`;
+                
+                const tdNom = document.createElement('td');
+                tdNom.className = "p-1 md:p-2 text-[10px] md:text-xs leading-tight sticky-col shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]";
+                tdNom.innerHTML = `<div class="font-bold text-gray-800">${obtenerNombreCorto(emp.nombre)}</div>`;
+                tr.appendChild(tdNom);
+
+                for(let i=0; i<7; i++) {
+                    const td = document.createElement('td');
+                    td.className = "droppable-cell relative"; 
+                    td.dataset.row = rowIndex;
+                    td.dataset.col = i;
+                    
+                    td.addEventListener('dragover', handleDragOver);
+                    td.addEventListener('dragleave', handleDragLeave);
+                    td.addEventListener('drop', handleDrop);
+                    
+                    tr.appendChild(td);
+                }
+                
+                const tdTotal = document.createElement('td');
+                tdTotal.className = "p-1 md:p-2 text-center font-bold text-gray-800 text-[10px] md:text-sm border-l border-gray-300 bg-gray-100/50";
+                tdTotal.id = `total-row-${rowIndex}`;
+                tdTotal.textContent = "0.0 h";
+                tr.appendChild(tdTotal);
+                
+                tbody.appendChild(tr);
+            });
+        }
+
+        let draggedData = null;
+        let dragSourceCell = null;
+        let dragSourceElement = null;
+
+        function handleDragStart(e) {
+            dragSourceElement = e.target.closest('.assigned-shift') || e.target.closest('.shift-block');
+            
+            if (dragSourceElement.closest('#favorites-container')) {
+                dragSourceCell = { isFavorite: true }; 
+            } else {
+                dragSourceCell = dragSourceElement.closest('.droppable-cell'); 
+            }
+
+            draggedData = {
+                codigo: dragSourceElement.dataset.code,
+                desc: dragSourceElement.dataset.desc,
+                baseDesc: dragSourceElement.dataset.baseDesc || dragSourceElement.dataset.desc,
+                horasExtras: dragSourceElement.dataset.horasExtras || "0",
+                colorCls: dragSourceElement.dataset.colorCls || (dragSourceElement.className.match(/bg-[a-z]+-[a-z0-9-]+/)?.[0] || 'bg-white')
+            };
+            if(isNovedad(draggedData.desc)) draggedData.colorCls = getColorPorNovedad(draggedData.desc);
+            
+            e.dataTransfer.setData('text/plain', JSON.stringify(draggedData));
+            e.dataTransfer.effectAllowed = 'copyMove';
+
+            if(dragSourceElement.closest('#sidebar')) {
+                setTimeout(() => {
+                    sidebar.classList.remove('open');
+                    overlay.classList.remove('open');
+                }, 100);
+            }
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('drag-over');
+            e.dataTransfer.dropEffect = dragSourceCell ? 'move' : 'copy';
+        }
+
+        function handleDragLeave(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+
+        function configurarZonasBasura() {
+            const trashZone = document.getElementById('trash-zone');
+            const favoritesZone = document.getElementById('favorites-dropzone');
+
+            trashZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                if(dragSourceCell) e.dataTransfer.dropEffect = 'move';
+            });
+            trashZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (dragSourceCell && dragSourceElement) {
+                    if (dragSourceCell.isFavorite) {
+                        let favId = dragSourceElement.dataset.favId;
+                        if(favId) toggleFavorito(favId);
+                    } else {
+                        dragSourceElement.remove();
+                        recalcularTotales();
+                    }
+                    dragSourceCell = null;
+                    dragSourceElement = null;
+                }
+            });
+
+            favoritesZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation(); 
+                e.dataTransfer.dropEffect = 'copy';
+            });
+            favoritesZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if(draggedData && !dragSourceCell?.isFavorite) {
+                    const extra = parseFloat(draggedData.horasExtras || "0");
+                    if(!isNovedad(draggedData.desc) && extra > 0) {
+                        guardarFavoritoExtendido(draggedData);
+                    } else {
+                        const idFav = isNovedad(draggedData.desc) ? draggedData.desc : draggedData.codigo;
+                        if(idFav && !esFavorito(idFav)) {
+                            let tempFavs = [...favoritos];
+                            toggleFavorito(idFav);
+                            let favAgregado = favoritos.find(f => f.id === idFav);
+                            if(favAgregado && draggedData.colorCls && !tempFavs.some(f => f.id === idFav)) {
+                                favAgregado.colorCls = draggedData.colorCls;
+                                guardarFavoritosStorage();
+                                renderizarFavoritos();
+                            }
+                        }
+                    }
+                    if (dragSourceCell && typeof dragSourceCell !== 'object' && dragSourceElement) {
+                        dragSourceElement.remove();
+                        recalcularTotales();
+                    }
+                }
+                dragSourceCell = null;
+                dragSourceElement = null;
+            });
+        }
+
+        function parseTime(text) {
+            const matches = text.match(/\d{2}:\d{2}/g);
+            if(matches && matches.length >= 2) {
+                let t1 = matches[0].split(':').map(Number);
+                let t2 = matches[1].split(':').map(Number);
+                let startMin = t1[0]*60 + t1[1];
+                let endMin = t2[0]*60 + t2[1];
+                if(endMin <= startMin) endMin += 24*60;
+                return { start: startMin, end: endMin };
+            }
+            return null;
+        }
+
+        function getShiftDuration(text) {
+            const times = parseTime(text);
+            if(!times) return 0;
+            return (times.end - times.start) / 60;
+        }
+
+        function handleDrop(e) {
+            e.preventDefault();
+            const targetCell = e.currentTarget;
+            targetCell.classList.remove('drag-over');
+            
+            if(!draggedData) return;
+            const isNov = isNovedad(draggedData.desc);
+            const existingBlocks = Array.from(targetCell.querySelectorAll('.assigned-shift'));
+            
+            if (dragSourceCell && !dragSourceCell.isFavorite && existingBlocks.length > 0 && targetCell !== dragSourceCell) {
+                const targetBlocks = Array.from(targetCell.children);
+                const sourceBlocks = Array.from(dragSourceCell.children);
+                
+                targetCell.innerHTML = '';
+                dragSourceCell.innerHTML = '';
+                
+                targetBlocks.forEach(b => dragSourceCell.appendChild(b));
+                sourceBlocks.forEach(b => targetCell.appendChild(b));
+                
+                ordenarTurnosCronologicamente(dragSourceCell);
+                ordenarTurnosCronologicamente(targetCell);
+                recalcularTotales();
+                dragSourceCell = null; dragSourceElement = null;
+                return;
+            }
+
+            if (dragSourceCell && !dragSourceCell.isFavorite && dragSourceElement && dragSourceElement.parentNode) {
+                dragSourceElement.parentNode.removeChild(dragSourceElement);
+            }
+
+            if(isNov) {
+                targetCell.innerHTML = '';
+                targetCell.appendChild(crearElementoTurnoUI(draggedData));
+                recalcularTotales();
+                return;
+            }
+
+            if(existingBlocks.length > 0 && (!dragSourceCell || dragSourceCell.isFavorite)) { 
+                if(existingBlocks[0] && isNovedad(existingBlocks[0].dataset.desc)) {
+                    targetCell.innerHTML = '';
+                } else {
+                    const newTime = parseTime(draggedData.desc);
+                    let collision = false;
+                    if(newTime) {
+                        for(let block of existingBlocks) {
+                            if(block === dragSourceElement) continue; 
+                            let exTime = parseTime(block.dataset.desc);
+                            if(exTime) {
+                                if(newTime.start < exTime.end && newTime.end > exTime.start) {
+                                    collision = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if(collision) {
+                        Swal.fire({ icon: 'error', title: 'Error', text: 'Choque de horas en la celda.', confirmButtonColor: '#1d4ed8' });
+                        if(dragSourceCell && !dragSourceCell.isFavorite && dragSourceElement) {
+                           dragSourceCell.appendChild(dragSourceElement);
+                           ordenarTurnosCronologicamente(dragSourceCell);
+                        }
+                        return;
+                    }
+                }
+            }
+            
+            targetCell.appendChild(crearElementoTurnoUI(draggedData));
+            ordenarTurnosCronologicamente(targetCell);
+            recalcularTotales();
+            
+            dragSourceCell = null; dragSourceElement = null;
+        }
+
+        function ordenarTurnosCronologicamente(cell) {
+            let blocks = Array.from(cell.querySelectorAll('.assigned-shift'));
+            blocks.sort((a, b) => {
+                let tA = parseTime(a.dataset.desc);
+                let tB = parseTime(b.dataset.desc);
+                if(!tA) return -1;
+                if(!tB) return 1;
+                return tA.start - tB.start;
+            });
+            cell.innerHTML = '';
+            blocks.forEach(b => cell.appendChild(b));
+        }
+
+        let autosaveTimer = null;
+        function recalcularTotales() {
+            actualizarDobleTurnoPresentacion();
+            empleados.forEach((emp, rowIndex) => {
+                const tr = document.querySelector(`#grid-body tr:nth-child(${rowIndex + 1})`);
+                if(!tr) return;
+                
+                let totalHorasFila = 0;
+                for(let i=1; i<=7; i++) { 
+                    const cell = tr.children[i];
+                    const blocks = cell.querySelectorAll('.assigned-shift');
+                    
+                    blocks.forEach(block => {
+                        let duracion = getShiftDuration(block.dataset.desc);
+                        if(duracion > 0) {
+                            if(duracion > 6) duracion -= 0.5;
+                            totalHorasFila += duracion;
+                        }
+                    });
+                }
+                document.getElementById(`total-row-${rowIndex}`).textContent = totalHorasFila.toFixed(1) + " h";
+            });
+
+            clearTimeout(autosaveTimer);
+            autosaveTimer = setTimeout(() => {
+                guardarSemanaSilenciosa();
+            }, 800);
+        }
+
+        function crearElementoTurnoUI(data) {
+            const div = document.createElement('div');
+            const uniqueId = 'shift-' + Math.random().toString(36).substr(2, 9);
+            div.id = uniqueId;
+            
+            const isNov = isNovedad(data.desc);
+            div.className = `assigned-shift rounded text-[11px] md:text-[13px] text-center border border-gray-400 font-bold shadow-sm cursor-pointer ${data.colorCls || 'bg-white'}`;
+            div.dataset.code = data.codigo || "";
+            div.dataset.desc = data.desc;
+            div.dataset.baseDesc = data.baseDesc || data.desc; 
+            div.dataset.horasExtras = data.horasExtras || "0";
+            div.dataset.colorCls = data.colorCls || "bg-white";
+            if(isNov) div.dataset.novedad = "true";
+            aplicarColorInline(div, data.colorCls || "bg-white");
+            
+            div.draggable = true;
+            div.addEventListener('dragstart', handleDragStart);
+            div.addEventListener('click', (e) => { abrirEdicionTurno(uniqueId, e); });
+            
+            const textoVisual = isNov ? data.desc : limpiarTextoTurno(data.desc);
+            div.innerHTML = `<div class="truncate px-1 pointer-events-none">${textoVisual}</div>`;
+
+            return div;
+        }
+
+        window.abrirEdicionTurno = function(id, event) {
+            if(event) event.stopPropagation();
+            const element = document.getElementById(id);
+            const isLactancia = element.dataset.baseDesc.includes("LACTANCIA");
+            const isNov = isNovedad(element.dataset.baseDesc);
+            const currentExtra = parseFloat(element.dataset.horasExtras || "0");
+
+            let optionsHtml = '<option value="0">Horario Base</option>';
+            for(let i=0.5; i<=8; i+=0.5) {
+                optionsHtml += `<option value="${i}" ${currentExtra === i ? 'selected' : ''}>+ ${i} Hora(s) Extra</option>`;
+            }
+
+            let gridColoresHtml = listaColoresDisponibles.map(c => 
+                `<div class="w-7 h-7 rounded cursor-pointer ${c.class} border border-gray-400 shadow-sm hover:scale-110 transition" title="${c.label}" onclick="cambiarColor('${id}', '${c.id}')"></div>`
+            ).join('');
+
+            Swal.fire({
+                title: 'Opciones de Turno',
+                html: `
+                    <div class="mb-4">
+                        <label class="block text-sm mb-2 text-left font-bold text-gray-700">Cambiar Color (Solo esta celda):</label>
+                        <div class="grid grid-cols-5 gap-2 justify-items-center">
+                            ${gridColoresHtml}
+                            <div class="w-7 h-7 rounded cursor-pointer bg-white border border-gray-400 shadow-sm hover:scale-110 transition flex items-center justify-center text-xs font-bold" title="Blanco" onclick="cambiarColor('${id}', 'bg-white')">∅</div>
+                        </div>
+                    </div>
+                    ${(!isLactancia && !isNov) ? `
+                    <hr class="my-4">
+                    <div class="mb-2">
+                        <label class="block text-sm mb-2 text-left font-bold text-gray-700">Extensión Horaria (Media en Media Hora):</label>
+                        <select id="horas-extra" class="w-full p-2 border rounded text-base">
+                            ${optionsHtml}
+                        </select>
+                    </div>
+                    ` : '<p class="text-xs text-red-500 mt-4 font-bold">* Extensión de horas bloqueada.</p>'}
+                `,
+                showCancelButton: true,
+                showDenyButton: true,
+                confirmButtonText: 'Aplicar',
+                denyButtonText: '🗑️ Eliminar',
+                cancelButtonText: 'Cancelar',
+                confirmButtonColor: '#10b981',
+                denyButtonColor: '#ef4444',
+                preConfirm: () => {
+                    if(!isLactancia && !isNov) {
+                        const select = document.getElementById('horas-extra');
+                        const addedHours = parseFloat(select.value) || 0;
+                        element.dataset.horasExtras = addedHours;
+                        
+                        const baseText = element.dataset.baseDesc;
+                        const times = parseTime(baseText);
+                        if(times) {
+                            const match = baseText.match(/\d{2}:\d{2}/g);
+                            if(match && match.length >= 2) {
+                                let startStr = match[0];
+                                let endStr = match[1];
+                                
+                                let t2 = endStr.split(':').map(Number);
+                                let addedMinutes = addedHours * 60;
+                                let totalMins = (t2[0] * 60) + t2[1] + addedMinutes;
+                                
+                                let newHour = Math.floor(totalMins / 60);
+                                let newMin = totalMins % 60;
+                                
+                                if(newHour >= 24) newHour -= 24;
+                                
+                                let newEndStr = ("0" + newHour).slice(-2) + ":" + ("0" + newMin).slice(-2);
+                                let newDesc = baseText.replace(endStr, newEndStr);
+                                
+                                element.dataset.desc = newDesc;
+                                element.querySelector('div').textContent = limpiarTextoTurno(newDesc);
+                            }
+                        }
+                    }
+                    return true;
+                }
+            }).then((result) => {
+                if (result.isDenied) {
+                    const parentCell = element.closest('.droppable-cell');
+                    element.remove();
+                    if(parentCell) ordenarTurnosCronologicamente(parentCell);
+                    recalcularTotales();
+                } else if (result.isConfirmed) {
+                    const parentCell = element.closest('.droppable-cell');
+                    if(parentCell) {
+                       ordenarTurnosCronologicamente(parentCell);
+                       recalcularTotales();
+                    }
+
+                    const extraAplicada = parseFloat(element.dataset.horasExtras || "0");
+                    if(!isLactancia && !isNov && extraAplicada > 0) {
+                        Swal.fire({
+                            title: '¿Anclar a Favoritos?',
+                            text: `Aplicaste +${extraAplicada} hora(s) extra. ¿Deseas guardar este turno extendido en Favoritos para reutilizarlo?`,
+                            icon: 'question',
+                            showCancelButton: true,
+                            confirmButtonText: 'Sí, guardar',
+                            cancelButtonText: 'No, gracias',
+                            confirmButtonColor: '#10b981'
+                        }).then((r2) => {
+                            if(r2.isConfirmed) {
+                                guardarFavoritoExtendido({
+                                    codigo: element.dataset.code,
+                                    baseDesc: element.dataset.baseDesc,
+                                    desc: element.dataset.desc,
+                                    horasExtras: element.dataset.horasExtras,
+                                    colorCls: element.dataset.colorCls
+                                });
+                            }
+                        });
+                    }
+                }
+            });
+        };
+
+        window.cambiarColor = (id, colorClass) => {
+            const el = document.getElementById(id);
+            // Limpia clases de color anteriores
+            listaColoresDisponibles.forEach(c => el.classList.remove(c.id));
+            el.classList.remove('bg-white');
+            
+            el.classList.add(colorClass);
+            el.dataset.colorCls = colorClass;
+            aplicarColorInline(el, colorClass);
+        };
+
+        // --- CONFIGURACIÓN & TAREAS POR COLOR ---
+        document.getElementById('btn-config').addEventListener('click', () => {
+            toolsDropdown.classList.add('hidden'); toolsArrow.style.transform = 'rotate(0deg)';
+            
+            let colorRowsHtml = listaColoresDisponibles.map(c => {
+                let currentTaskText = configGlobal.colorTasks[c.id] || '';
+                return `<div class="flex items-center gap-3 mb-3 pb-2 border-b">
+                            <div class="w-8 h-8 rounded ${c.class} border shrink-0"></div>
+                            <div class="flex-1">
+                                <label class="block text-xs font-bold text-gray-700">${c.label}</label>
+                                <textarea id="task-${c.id}" class="w-full p-1 border rounded text-xs mt-1" rows="2" placeholder="Escribe tareas (cada línea será una viñeta)...">${currentTaskText}</textarea>
+                            </div>
+                        </div>`;
+            }).join('');
+
+            Swal.fire({
+                title: '⚙️ Configuración Operativa',
+                html: `
+                    <div class="text-left max-h-[70vh] overflow-y-auto px-1">
+                        <div class="mb-4">
+                            <label class="block text-sm font-bold text-gray-700 mb-1">Nombre de la Sucursal:</label>
+                            <input type="text" id="input-sucursal" class="w-full p-2 border rounded text-sm uppercase font-bold" value="${configGlobal.sucursal}">
+                        </div>
+                        <hr class="my-4">
+                        <h3 class="font-bold text-sm text-blue-900 mb-2">Asignación de Tareas por Color (Leyenda):</h3>
+                        <p class="text-xs text-gray-500 mb-3">Define las actividades para cada color. Si dejas un color vacío, no aparecerá en el reporte.</p>
+                        ${colorRowsHtml}
+                    </div>
+                `,
+                width: '600px',
+                showCancelButton: true,
+                confirmButtonText: 'Guardar Configuración',
+                confirmButtonColor: '#10b981',
+                preConfirm: () => {
+                    let nuevoNombre = document.getElementById('input-sucursal').value.trim().toUpperCase();
+                    if(!nuevoNombre) nuevoNombre = "SUCURSAL";
+                    
+                    let nuevasTareas = {};
+                    listaColoresDisponibles.forEach(c => {
+                        let val = document.getElementById(`task-${c.id}`).value.trim();
+                        if(val) nuevasTareas[c.id] = val;
+                    });
+
+                    return { sucursal: nuevoNombre, colorTasks: nuevasTareas };
+                }
+            }).then((res) => {
+                if(res.isConfirmed) {
+                    configGlobal = res.value;
+                    localStorage.setItem('farmacia_config_v10', JSON.stringify(configGlobal));
+                    Swal.fire('Guardado', 'Configuración actualizada correctamente.', 'success');
+                }
+            });
+        });
+
+
+        // Compacta exactamente dos turnos en la misma celda (edición Y Presentación). Solo es visual.
+        function actualizarDobleTurnoPresentacion() {
+            document.querySelectorAll('#grid-body .droppable-cell').forEach(cell => {
+                const shifts = Array.from(cell.children).filter(el => el.classList.contains('assigned-shift'));
+                shifts.forEach(shift => shift.classList.remove('compact-double-shift'));
+                if (shifts.length === 2) {
+                    shifts.forEach(shift => shift.classList.add('compact-double-shift'));
+                }
+            });
+        }
+
+        // --- MODO PRESENTACIÓN & LEYENDA AUTOMÁTICA ---
+        document.getElementById('btn-presentation').addEventListener('click', () => {
+            toolsDropdown.classList.add('hidden'); toolsArrow.style.transform = 'rotate(0deg)';
+            sidebar.classList.remove('open'); overlay.classList.remove('open');
+            
+            document.getElementById('ph-sucursal').textContent = configGlobal.sucursal;
+            
+            let domLunes = document.getElementById('monday-date').value;
+            let dIni = new Date(domLunes + "T12:00:00Z");
+            let dFin = new Date(dIni); dFin.setDate(dIni.getDate() + 6);
+            
+            const formatear = d => ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2) + "/" + d.getFullYear();
+            document.getElementById('ph-fechas').textContent = `DEL ${formatear(dIni)} AL ${formatear(dFin)}`;
+
+            // Escanear colores usados en la malla actual para construir la leyenda dinámica
+            construirLeyendaDinamica();
+            
+            document.getElementById('toggle-colors-checkbox').checked = true;
+            document.body.classList.remove('monochrome-report');
+            document.querySelectorAll('#grid-body .assigned-shift').forEach(el => {
+                aplicarColorInline(el, el.dataset.colorCls || 'bg-white');
+            });
+
+            document.body.classList.add('presentation-mode');
+            actualizarDobleTurnoPresentacion();
+        });
+
+        document.getElementById('btn-exit-presentation').addEventListener('click', () => {
+            document.body.classList.remove('presentation-mode');
+            document.body.classList.remove('monochrome-report');
+            document.getElementById('toggle-colors-checkbox').checked = true;
+            document.querySelectorAll('#grid-body .assigned-shift').forEach(el => {
+                aplicarColorInline(el, el.dataset.colorCls || 'bg-white');
+            });
+            actualizarDobleTurnoPresentacion();
+        });
+
+        function togglePresentationColors(mostrar) {
+            document.body.classList.toggle('monochrome-report', !mostrar);
+            document.querySelectorAll('#grid-body .assigned-shift').forEach(el => {
+                if (el.dataset.novedad === 'true') return; // las novedades ya se ven en gris por CSS
+                if (mostrar) {
+                    aplicarColorInline(el, el.dataset.colorCls || 'bg-white');
+                } else {
+                    el.style.setProperty('background-color', '#ffffff', 'important');
+                    el.style.setProperty('color', '#000000', 'important');
+                }
+            });
+        }
+
+        function construirLeyendaDinamica() {
+            let container = document.getElementById('legend-items-container');
+            container.innerHTML = '';
+
+            // Detectar qué clases de color están presentes en la grilla actual
+            let coloresUsados = new Set();
+            document.querySelectorAll('#grid-body .assigned-shift').forEach(shift => {
+                let cCls = shift.dataset.colorCls;
+                if(cCls && cCls !== 'bg-white') {
+                    coloresUsados.add(cCls);
+                }
+            });
+
+            let itemsCount = 0;
+            listaColoresDisponibles.forEach(c => {
+                if(coloresUsados.has(c.id) && configGlobal.colorTasks[c.id]) {
+                    itemsCount++;
+                    let tareasTexto = configGlobal.colorTasks[c.id];
+                    let lineas = tareasTexto.split('\n').filter(l => l.trim() !== '');
+                    let listaLis = lineas.map(l => `<li class="ml-4 list-disc">${l}</li>`).join('');
+
+                    let divItem = document.createElement('div');
+                    divItem.className = "flex items-start gap-2 bg-gray-50 border p-2 rounded";
+                    divItem.innerHTML = `
+                        <div class="w-5 h-5 rounded ${c.class} border shrink-0 mt-0.5"></div>
+                        <div class="flex-1">
+                            <p class="font-bold text-xs uppercase text-gray-800">${c.label}:</p>
+                            <ul class="text-xs text-gray-700 mt-1">${listaLis}</ul>
+                        </div>
+                    `;
+                    container.appendChild(divItem);
+                }
+            });
+
+            let footerLegend = document.getElementById('presentation-footer-legend');
+            if(itemsCount > 0) {
+                footerLegend.classList.remove('hidden');
+            } else {
+                footerLegend.classList.add('hidden');
+            }
+        }
+
+        // ================== EXPANSIÓN TEMPORAL PARA CAPTURA COMPLETA ==================
+        // En vez de clonar la malla a un contenedor oculto (poco confiable en algunos
+        // navegadores móviles), agrandamos la malla REAL a su tamaño natural completo
+        // (sin scroll, sin recorte) justo antes de capturar/imprimir, y la devolvemos
+        // a su estado normal apenas termina. Se usa tanto para "Descargar Imagen" como
+        // para "Imprimir / PDF".
+        function expandirParaCaptura() {
+            const capture = document.getElementById('capture-area');
+            const wrapper = document.getElementById('main-content-wrapper');
+            const estadoPrevio = {
+                bodyOverflow: document.body.style.overflow,
+                bodyHeight: document.body.style.height,
+                wrapperOverflow: wrapper ? wrapper.style.overflow : '',
+                captureOverflow: capture.style.overflow,
+                captureHeight: capture.style.height,
+                captureMaxHeight: capture.style.maxHeight,
+                scrollX: window.scrollX,
+                scrollY: window.scrollY
+            };
+            document.body.style.overflow = 'visible';
+            document.body.style.height = 'auto';
+            if (wrapper) wrapper.style.overflow = 'visible';
+            capture.style.overflow = 'visible';
+            capture.style.height = 'auto';
+            capture.style.maxHeight = 'none';
+            window.scrollTo(0, 0);
+            return estadoPrevio;
+        }
+
+        function restaurarDespuesDeCaptura(estadoPrevio) {
+            const capture = document.getElementById('capture-area');
+            const wrapper = document.getElementById('main-content-wrapper');
+            document.body.style.overflow = estadoPrevio.bodyOverflow;
+            document.body.style.height = estadoPrevio.bodyHeight;
+            if (wrapper) wrapper.style.overflow = estadoPrevio.wrapperOverflow;
+            capture.style.overflow = estadoPrevio.captureOverflow;
+            capture.style.height = estadoPrevio.captureHeight;
+            capture.style.maxHeight = estadoPrevio.captureMaxHeight;
+            window.scrollTo(estadoPrevio.scrollX, estadoPrevio.scrollY);
+        }
+
+        document.getElementById('btn-print-pdf').addEventListener('click', () => {
+            const estado = expandirParaCaptura();
+            let yaRestaurado = false;
+            const restaurar = () => {
+                if (yaRestaurado) return;
+                yaRestaurado = true;
+                restaurarDespuesDeCaptura(estado);
+                window.removeEventListener('afterprint', restaurar);
+            };
+            window.addEventListener('afterprint', restaurar);
+            setTimeout(() => { window.print(); }, 60);
+            setTimeout(restaurar, 8000); // salvaguarda si el navegador no dispara 'afterprint'
+        });
+
+        document.getElementById('btn-download-image').addEventListener('click', async () => {
+            Swal.fire({
+                title: 'Generando Imagen...',
+                html: 'Preparando la malla completa.',
+                allowOutsideClick: false,
+                didOpen: () => { Swal.showLoading(); }
+            });
+
+            let estadoPrevio = null;
+
+            try {
+                const source = document.getElementById('capture-area');
+                if (!source) throw new Error('No existe #capture-area.');
+
+                /*
+                 * Estrategia nueva: en vez de clonar la malla a un contenedor oculto
+                 * (que en algunos navegadores móviles se recortaba al tamaño de
+                 * pantalla), agrandamos la malla REAL a su tamaño natural completo
+                 * -sin scroll ni recorte- justo antes de capturar. El modal de
+                 * SweetAlert2 ya cubre toda la pantalla mientras tanto.
+                 */
+                estadoPrevio = expandirParaCaptura();
+
+                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve =>
+                    requestAnimationFrame(() =>
+                        requestAnimationFrame(resolve)
+                    )
+                );
+
+                const exportWidth = Math.ceil(Math.max(source.scrollWidth, source.offsetWidth));
+                const exportHeight = Math.ceil(Math.max(source.scrollHeight, source.offsetHeight));
+
+                if (exportWidth < 10 || exportHeight < 10) {
+                    throw new Error('Dimensiones inválidas de exportación.');
+                }
+
+                // Ya no simulamos un tamaño de ventana virtual (windowWidth/windowHeight):
+                // la malla ya está realmente expandida en la página en este punto, así
+                // que dejamos que html2canvas mida el elemento tal cual está en pantalla.
+                const canvas = await html2canvas(source, {
+                    backgroundColor: '#ffffff',
+                    scale: 1,
+                    useCORS: true,
+                    allowTaint: false,
+                    logging: false,
+                    x: 0,
+                    y: 0,
+                    scrollX: 0,
+                    scrollY: 0
+                });
+
+                const link = document.createElement('a');
+                const nombreSucursal = (configGlobal.sucursal || 'Sucursal')
+                    .replace(/\s+/g, '_')
+                    .replace(/[^a-zA-Z0-9_-]/g, '');
+
+                link.download = `${nombreSucursal}_MallaOperativa.png`;
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+
+                // Si el navegador igual recortó la captura (menos del 90% del alto real
+                // esperado), avisamos claramente en vez de dejar que el usuario piense
+                // que no hicimos nada al respecto.
+                if (canvas.height < exportHeight * 0.9) {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Imagen posiblemente incompleta',
+                        text: 'Tu navegador parece estar recortando la captura de imagen pese al ajuste. Como alternativa confiable, usa el botón "🖨️ Imprimir / PDF" y comparte ese PDF — ya sabemos que ese sí sale completo y a color.',
+                        confirmButtonColor: '#f59e0b'
+                    });
+                } else {
+                    Swal.close();
+                }
+
+            } catch (err) {
+                console.error('Error exportando presentación completa:', err);
+                Swal.fire(
+                    'Error',
+                    'No se pudo generar la imagen completa.',
+                    'error'
+                );
+            } finally {
+                if (estadoPrevio) {
+                    restaurarDespuesDeCaptura(estadoPrevio);
+                }
+            }
+        });
+
+
+        // --- HISTORIAL Y GUARDADO ---
+        function capturarMallaActual() {
+            return empleados.map((emp, i) => {
+                let tr = document.querySelector(`#grid-body tr:nth-child(${i + 1})`);
+                let rowShifts = [];
+                if(tr) {
+                    for(let c=1; c<=7; c++) {
+                        let cell = tr.children[c];
+                        let shifts = Array.from(cell.querySelectorAll('.assigned-shift')).map(b => ({
+                            codigo: b.dataset.code,
+                            desc: b.dataset.desc,
+                            baseDesc: b.dataset.baseDesc,
+                            horasExtras: b.dataset.horasExtras,
+                            colorCls: b.dataset.colorCls || 'bg-white'
+                        }));
+                        rowShifts.push(shifts);
+                    }
+                }
+                return { cedula: emp.cedula, shifts: rowShifts };
+            });
+        }
+
+        function guardarSemanaSilenciosa() {
+            let isoLunes = document.getElementById('monday-date').value;
+            if(!isoLunes) return;
+            historialMallas[isoLunes] = {
+                updatedAt: new Date().toISOString(),
+                data: capturarMallaActual()
+            };
+            localStorage.setItem('farmacia_historial_v10', JSON.stringify(historialMallas));
+        }
+
+        // ================== EXCEL DOBLE FORMATO (Farmacia + Biométrico) ==================
+        // Genera UN solo archivo .xlsx con 2 pestañas, ambas con el horario de la
+        // semana ACTUALMENTE visible en la malla (no toca el historial de otras semanas).
+
+        function argbColor(hex) {
+            const h = (hex || '#FFFFFF').replace('#', '').toUpperCase();
+            return 'FF' + h;
+        }
+
+        function obtenerNombreApellidoPrimero(nombreCompleto) {
+            // Igual que obtenerNombreCorto pero en orden Apellido + Nombre (para Malla Biométrico)
+            const capitalizar = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+            const partes = nombreCompleto.trim().split(/\s+/).filter(Boolean);
+            if (partes.length >= 3) return capitalizar(partes[0]) + " " + capitalizar(partes[2]);
+            if (partes.length === 2) return capitalizar(partes[0]) + " " + capitalizar(partes[1]);
+            if (partes.length === 1) return capitalizar(partes[0]);
+            return nombreCompleto;
+        }
+
+        function formatMinutosHHMM(min) {
+            let m = ((Math.round(min / 30) * 30) % 1440 + 1440) % 1440;
+            let hh = Math.floor(m / 60);
+            let mm = m % 60;
+            return ("0" + hh).slice(-2) + ":" + ("0" + mm).slice(-2);
+        }
+
+        // Regla FIJA simple: break de 30 min centrado en la mitad del turno,
+        // solo para turnos de más de 6 horas. Redondeado a la media hora más cercana.
+        function calcularBreakSimple(descTurno) {
+            const t = parseTime(descTurno);
+            if (!t) return null;
+            const duracionH = (t.end - t.start) / 60;
+            if (duracionH <= 6) return null;
+            const medioMin = (t.start + t.end) / 2;
+            const inicioBreak = medioMin - 15;
+            const finBreak = inicioBreak + 30;
+            return `${formatMinutosHHMM(inicioBreak)} - ${formatMinutosHHMM(finBreak)}`;
+        }
+
+        function formatHorasNumero(h) {
+            if (Number.isInteger(h)) return String(h);
+            return h.toFixed(1).replace('.', ',');
+        }
+
+        async function generarExcelDobleFormato() {
+            const isoLunes = document.getElementById('monday-date').value;
+            if (!isoLunes) { Swal.fire('Atención', 'Selecciona primero la fecha del lunes.', 'warning'); return; }
+
+            Swal.fire({ title: 'Generando Excel...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+            try {
+                const mondayDate = new Date(isoLunes + "T12:00:00Z");
+                const NOMBRES_DIA = ['LUNES', 'MARTES', 'MIÉRCOLES', 'JUEVES', 'VIERNES', 'SÁBADO', 'DOMINGO'];
+                const dias = [];
+                for (let i = 0; i < 7; i++) {
+                    const d = new Date(mondayDate);
+                    d.setDate(mondayDate.getDate() + i);
+                    const fechaStr = ("0" + d.getDate()).slice(-2) + "/" + ("0" + (d.getMonth() + 1)).slice(-2) + "/" + d.getFullYear();
+                    dias.push({ nombre: NOMBRES_DIA[i], fecha: fechaStr });
+                }
+
+                // Leer directamente de la malla visible en pantalla (misma fuente que "Subir Biométrico")
+                const filas = Array.from(document.querySelectorAll('#grid-body tr')).map((tr, rowIndex) => {
+                    const emp = empleados[rowIndex];
+                    const celdas = tr.querySelectorAll('td.droppable-cell');
+                    const diasData = [];
+                    for (let c = 0; c < 7; c++) {
+                        const shifts = celdas[c] ? Array.from(celdas[c].querySelectorAll('.assigned-shift')).map(b => ({
+                            desc: b.dataset.desc, baseDesc: b.dataset.baseDesc || b.dataset.desc, colorCls: b.dataset.colorCls || 'bg-white'
+                        })) : [];
+                        diasData.push(shifts);
+                    }
+                    return { emp, diasData };
+                });
+
+                const wb = new ExcelJS.Workbook();
+
+                // ---------- PESTAÑA 1: FORMATO FARMACIA (con colores) ----------
+                const ws1 = wb.addWorksheet('Formato Farmacia');
+                ws1.getColumn(1).width = 22;
+                for (let d = 0; d < 7; d++) {
+                    ws1.getColumn(2 + d * 2).width = 16;
+                    ws1.getColumn(3 + d * 2).width = 8;
+                }
+                ws1.getColumn(16).width = 9;
+
+                const headerFill1 = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbColor('#1E88FF') } };
+                const thinBorder = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+
+                const c1nombre = ws1.getCell(1, 1);
+                c1nombre.value = 'NOMBRE'; c1nombre.fill = headerFill1;
+                c1nombre.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                c1nombre.alignment = { horizontal: 'center', vertical: 'middle' };
+                c1nombre.border = thinBorder;
+
+                dias.forEach((dia, i) => {
+                    const col = 2 + i * 2;
+                    ws1.mergeCells(1, col, 1, col + 1);
+                    const cell = ws1.getCell(1, col);
+                    cell.value = `${dia.nombre}\n${dia.fecha}`;
+                    cell.fill = headerFill1;
+                    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                    for (let cc = col; cc <= col + 1; cc++) ws1.getCell(1, cc).border = thinBorder;
+                });
+
+                const cTotal1 = ws1.getCell(1, 16);
+                cTotal1.value = 'TOTAL'; cTotal1.fill = headerFill1;
+                cTotal1.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                cTotal1.alignment = { horizontal: 'center', vertical: 'middle' };
+                cTotal1.border = thinBorder;
+                ws1.getRow(1).height = 28;
+
+                filas.forEach((fila, rowIndex) => {
+                    const excelRow = rowIndex + 2;
+                    const nombreCell = ws1.getCell(excelRow, 1);
+                    nombreCell.value = obtenerNombreCorto(fila.emp.nombre).toUpperCase();
+                    nombreCell.font = { bold: true };
+                    nombreCell.alignment = { vertical: 'middle' };
+                    nombreCell.border = thinBorder;
+
+                    let totalSemana = 0;
+                    fila.diasData.forEach((shifts, d) => {
+                        const colHorario = 2 + d * 2;
+                        const colHoras = 3 + d * 2;
+                        const cellH = ws1.getCell(excelRow, colHorario);
+                        const cellN = ws1.getCell(excelRow, colHoras);
+                        cellH.border = thinBorder; cellN.border = thinBorder;
+                        cellH.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                        cellN.alignment = { horizontal: 'center', vertical: 'middle' };
+
+                        if (shifts.length > 0) {
+                            const esNov = isNovedad(shifts[0].desc);
+                            const textos = shifts.map(s => esNov ? s.desc : limpiarTextoTurno(s.desc));
+                            cellH.value = textos.join('\n');
+                            const colorInfo = COLOR_HEX_MAP[shifts[0].colorCls] || COLOR_HEX_MAP['bg-white'];
+                            if (shifts[0].colorCls && shifts[0].colorCls !== 'bg-white') {
+                                cellH.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbColor(colorInfo.bg) } };
+                                cellH.font = { bold: true, color: { argb: argbColor(colorInfo.text) } };
+                            } else {
+                                cellH.font = { bold: true };
+                            }
+                            let horasDia = 0;
+                            shifts.forEach(s => {
+                                let dur = getShiftDuration(s.desc);
+                                if (dur > 6) dur -= 0.5;
+                                horasDia += dur;
+                            });
+                            cellN.value = formatHorasNumero(horasDia);
+                            cellN.font = { bold: true };
+                            totalSemana += horasDia;
+                        }
+                    });
+
+                    const cellTotal = ws1.getCell(excelRow, 16);
+                    cellTotal.value = formatHorasNumero(totalSemana);
+                    cellTotal.font = { bold: true };
+                    cellTotal.alignment = { horizontal: 'center', vertical: 'middle' };
+                    cellTotal.border = thinBorder;
+                    ws1.getRow(excelRow).height = 26;
+                });
+
+                // ---------- PESTAÑA 2: MALLA BIOMÉTRICO (sin colores, con break) ----------
+                const ws2 = wb.addWorksheet('Malla Biometrico');
+                ws2.getColumn(1).width = 20;
+                for (let d = 0; d < 7; d++) ws2.getColumn(2 + d).width = 16;
+
+                const headerFill2 = { type: 'pattern', pattern: 'solid', fgColor: { argb: argbColor('#1E88FF') } };
+
+                const t2trab = ws2.getCell(1, 1);
+                t2trab.value = 'Trabajador'; t2trab.fill = headerFill2;
+                t2trab.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                t2trab.alignment = { horizontal: 'center', vertical: 'middle' };
+                t2trab.border = thinBorder;
+
+                dias.forEach((dia, i) => {
+                    const cell = ws2.getCell(1, 2 + i);
+                    cell.value = `${dia.nombre}\n${dia.fecha}`;
+                    cell.fill = headerFill2;
+                    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+                    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+                    cell.border = thinBorder;
+                });
+                ws2.getRow(1).height = 28;
+
+                filas.forEach((fila, rowIndex) => {
+                    const excelRow = rowIndex + 2;
+                    const nombreCell = ws2.getCell(excelRow, 1);
+                    nombreCell.value = obtenerNombreApellidoPrimero(fila.emp.nombre);
+                    nombreCell.font = { bold: true };
+                    nombreCell.alignment = { vertical: 'middle' };
+                    nombreCell.border = thinBorder;
+
+                    fila.diasData.forEach((shifts, d) => {
+                        const cell = ws2.getCell(excelRow, 2 + d);
+                        cell.border = thinBorder;
+                        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+
+                        if (shifts.length === 0) { return; }
+                        const esNov = isNovedad(shifts[0].desc);
+                        if (esNov) {
+                            cell.value = shifts[0].desc.charAt(0) + shifts[0].desc.slice(1).toLowerCase();
+                            cell.font = { italic: true, color: { argb: 'FF888888' } };
+                        } else {
+                            const lineas = shifts.map(s => {
+                                const texto = limpiarTextoTurno(s.desc);
+                                const brk = calcularBreakSimple(s.desc);
+                                return brk ? `${texto}\nBreak ${brk}` : texto;
+                            });
+                            cell.value = lineas.join('\n');
+                            cell.font = { bold: false };
+                        }
+                    });
+                    ws2.getRow(excelRow).height = 40;
+                });
+
+                const buffer = await wb.xlsx.writeBuffer();
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Horarios_${isoLunes}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+
+                Swal.fire({ icon: 'success', title: '¡Listo!', text: 'Se descargó el Excel con las pestañas "Formato Farmacia" y "Malla Biometrico".', confirmButtonColor: '#10b981' });
+            } catch (error) {
+                console.error(error);
+                Swal.fire({ icon: 'error', title: 'Error', text: 'No se pudo generar el Excel.', confirmButtonColor: '#ef4444' });
+            }
+        }
+
+        document.getElementById('btn-respaldo-excel').addEventListener('click', generarExcelDobleFormato);
+
+        document.getElementById('btn-guardar-semana').addEventListener('click', () => {
+            toolsDropdown.classList.add('hidden'); toolsArrow.style.transform = 'rotate(0deg)';
+            guardarSemanaSilenciosa();
+            Swal.fire({ icon: 'success', title: 'Semana Guardada', text: 'Esta malla ha sido asegurada en el historial local.', confirmButtonColor: '#10b981' });
+        });
+
+        // --- RESETEAR MALLA: borra solo los turnos asignados en la grilla actual ---
+        // No toca el cajón de Favoritos ni el historial de otras semanas guardadas.
+        document.getElementById('btn-reset-malla').addEventListener('click', () => {
+            Swal.fire({
+                icon: 'warning',
+                title: '¿Resetear la malla?',
+                text: 'Esto borrará todos los turnos asignados en la semana actual. Tus Favoritos no se ven afectados. Esta acción no se puede deshacer.',
+                showCancelButton: true,
+                confirmButtonText: 'Sí, resetear',
+                cancelButtonText: 'Cancelar',
+                confirmButtonColor: '#ef4444'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    document.querySelectorAll('#grid-body .droppable-cell').forEach(cell => {
+                        cell.innerHTML = '';
+                    });
+                    recalcularTotales();
+                    Swal.fire({ icon: 'success', title: 'Malla reseteada', text: 'Se borraron todos los turnos de la semana actual.', confirmButtonColor: '#10b981' });
+                }
+            });
+        });
+
+        function cargarSemanaActualSiExiste(isoLunes) {
+            let record = historialMallas[isoLunes];
+            if(record) cargarGridDesdeHistorial(record.data);
+        }
+
+        function cargarGridDesdeHistorial(gridData) {
+            renderizarGrid();
+            empleados.forEach((emp, i) => {
+                let rowData = gridData.find(d => d.cedula === emp.cedula);
+                if(rowData) {
+                    let tr = document.querySelector(`#grid-body tr:nth-child(${i + 1})`);
+                    if(tr) {
+                        for(let c=1; c<=7; c++) {
+                            let cell = tr.children[c];
+                            let cellShifts = rowData.shifts[c-1];
+                            if(cellShifts) {
+                                cellShifts.forEach(sData => {
+                                    cell.appendChild(crearElementoTurnoUI(sData));
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+            recalcularTotales();
+        }
+
+        document.getElementById('btn-historial').addEventListener('click', () => {
+            toolsDropdown.classList.add('hidden'); toolsArrow.style.transform = 'rotate(0deg)';
+            
+            let keys = Object.keys(historialMallas).sort().reverse();
+            if(keys.length === 0) {
+                Swal.fire('Historial Vacío', 'No hay semanas guardadas aún.', 'info');
+                return;
+            }
+
+            let htmlOptions = keys.map(k => {
+                let d = new Date(k + "T12:00:00Z");
+                return `<div class="flex justify-between items-center bg-gray-50 border p-2 mb-2 rounded shadow-sm">
+                            <span class="font-bold text-blue-900 cursor-pointer flex-1" onclick="ejecutarCargaSemana('${k}')">Semana del Lunes ${("0" + d.getDate()).slice(-2)}/${("0" + (d.getMonth() + 1)).slice(-2)}/${d.getFullYear()}</span>
+                            <button class="bg-red-500 hover:bg-red-600 text-white px-2 py-1 rounded text-xs ml-2" onclick="borrarSemanaHistorial('${k}')">Borrar</button>
+                        </div>`;
+            }).join('');
+
+            Swal.fire({
+                title: 'Historial de Mallas',
+                html: `<div class="text-left mt-4 max-h-60 overflow-y-auto">${htmlOptions}</div>`,
+                showConfirmButton: false,
+                showCloseButton: true
+            });
+        });
+
+        window.ejecutarCargaSemana = function(isoLunes) {
+            Swal.fire({
+                title: '¿Cargar Semana?',
+                text: "Esto reemplazará lo que tienes actualmente en pantalla.",
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#10b981',
+                confirmButtonText: 'Sí, cargar'
+            }).then((result) => {
+                if(result.isConfirmed) {
+                    document.getElementById('monday-date').value = isoLunes;
+                    actualizarFechas(new Date(isoLunes + "T12:00:00Z"));
+                    cargarSemanaActualSiExiste(isoLunes);
+                    Swal.fire('Cargada', 'Semana recuperada con éxito.', 'success');
+                }
+            });
+        };
+
+        window.borrarSemanaHistorial = function(isoLunes) {
+            Swal.fire({
+                title: '¿Estás seguro?',
+                text: "Esta acción borrará la semana seleccionada de tu historial local.",
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#ef4444',
+                confirmButtonText: 'Sí, borrar'
+            }).then((result) => {
+                if(result.isConfirmed) {
+                    delete historialMallas[isoLunes];
+                    localStorage.setItem('farmacia_historial_v10', JSON.stringify(historialMallas));
+                    document.getElementById('btn-historial').click();
+                }
+            });
+        };
+
+        // DESCARGA GPF ESTRICTA
+        //
+        // IMPORTANTE: la plantilla GPF nativa (generada por el sistema D2EXPRESS)
+        // guarda TODAS sus celdas de texto como <x:c ... t="str"><x:v>VALOR</x:v></x:c>
+        // (string "cacheado" inline), NO como shared strings (t="s"). El importador
+        // de turnos del sistema no resuelve shared strings, así que si generamos el
+        // archivo con ExcelJS (que siempre escribe t="s"), el archivo se sube sin error
+        // pero los turnos quedan sin procesar. Por eso aquí NO se usa ExcelJS para
+        // escribir: se edita directamente el XML interno (xl/worksheets/sheet1.xml)
+        // con JSZip, cambiando solo el contenido de <x:v> en las celdas necesarias y
+        // dejando el resto del archivo (estilos, combinaciones, printerSettings, todo)
+        // exactamente como lo entrega el sistema.
+        function setCellStr(xml, ref, value) {
+            const re = new RegExp(`(<x:c r="${ref}"[^>]*>)(?:<x:v>[\\s\\S]*?<\\/x:v>)?(<\\/x:c>)`);
+            const safe = String(value ?? "")
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            if (!re.test(xml)) {
+                console.warn(`Celda ${ref} no encontrada en la plantilla GPF.`);
+                return xml;
+            }
+            return xml.replace(re, `$1<x:v>${safe}</x:v>$2`);
+        }
+
+        document.getElementById('btn-download').addEventListener('click', async () => {
+            // Abrimos Biométrika PRIMERO y de forma síncrona (antes de cualquier await),
+            // para que el navegador no lo bloquee como pop-up no solicitado.
+            const mondayInputValForBiometrico = document.getElementById('monday-date').value;
+            if (mondayInputValForBiometrico) {
+                const biometricoUrl = `${BIOMETRICO_BASE_URL}?day=${mondayInputValForBiometrico}&tkn=${BIOMETRICO_TOKEN}`;
+                window.open(biometricoUrl, '_blank');
+            }
+
+            try {
+                Swal.fire({ title: 'Generando Excel...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+
+                const zip = await JSZip.loadAsync(currentTemplateBuffer.slice(0));
+                const sheetPath = 'xl/worksheets/sheet1.xml';
+                let sheetXml = await zip.file(sheetPath).async('string');
+
+                // --- Encabezado: título de mes/año y números de día de la semana ---
+                // La plantilla GPF trae el título en C1 (fusionado C1:BL1) y el número
+                // de día en la fila 3, en la primera columna de cada par fusionado
+                // (C=Lunes, E=Martes, G=Miércoles, I=Jueves, K=Viernes, M=Sábado, O=Domingo).
+                const NOMBRES_MES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
+                const DAY_COLS = ['C','E','G','I','K','M','O']; // Lunes..Domingo
+                const mondayInputVal = document.getElementById('monday-date').value;
+                const mondayDate = new Date(mondayInputVal + "T12:00:00Z");
+
+                sheetXml = setCellStr(sheetXml, 'C1', `MES DE ${NOMBRES_MES[mondayDate.getMonth()]} DEL ${mondayDate.getFullYear()}`);
+
+                for (let i = 0; i < 7; i++) {
+                    const d = new Date(mondayDate);
+                    d.setDate(mondayDate.getDate() + i);
+                    sheetXml = setCellStr(sheetXml, `${DAY_COLS[i]}3`, String(d.getDate()));
+                }
+
+                // --- Filas de colaboradores ---
+                // La plantilla GPF trae exactamente 5 filas con formato/bordes listos
+                // para colaboradores (filas 4 a 8); debajo empieza la leyenda de turnos.
+                const EMP_START_ROW = 4;
+                const EMP_MAX_ROWS = 5;
+
+                // Se limpian primero las 5 filas por si la plantilla trae datos de ejemplo
+                // o si hay menos colaboradores que filas (evita dejar residuos).
+                for (let i = 0; i < EMP_MAX_ROWS; i++) {
+                    const r = EMP_START_ROW + i;
+                    sheetXml = setCellStr(sheetXml, `A${r}`, '');
+                    sheetXml = setCellStr(sheetXml, `B${r}`, '');
+                    for (const col of DAY_COLS) {
+                        sheetXml = setCellStr(sheetXml, `${col}${r}`, '');
+                    }
+                }
+
+                const rows = document.querySelectorAll('#grid-body tr');
+                const excedeCapacidad = empleados.length > EMP_MAX_ROWS;
+
+                rows.forEach((tr, rowIndex) => {
+                    if (rowIndex >= EMP_MAX_ROWS) return; // la plantilla no tiene más filas disponibles
+
+                    const emp = empleados[rowIndex];
+                    const excelRowNumber = EMP_START_ROW + rowIndex;
+
+                    sheetXml = setCellStr(sheetXml, `A${excelRowNumber}`, emp.cedula);
+                    sheetXml = setCellStr(sheetXml, `B${excelRowNumber}`, emp.nombre);
+
+                    const cells = tr.querySelectorAll('td.droppable-cell');
+                    for (let c = 0; c <= 6; c++) {
+                        if (!cells[c]) continue;
+                        const shiftBlocks = cells[c].querySelectorAll('.assigned-shift');
+                        let finalCode = "";
+                        if (shiftBlocks.length > 0) {
+                            const codes = Array.from(shiftBlocks)
+                                .map(b => b.dataset.code)
+                                .filter(code => code !== "");
+                            if (codes.length > 0) finalCode = codes.join(".");
+                        }
+                        // Cada día ocupa un par de columnas fusionadas (ej. C:D para Lunes);
+                        // el valor SIEMPRE va en la primera columna del par (la "ancla" del merge).
+                        sheetXml = setCellStr(sheetXml, `${DAY_COLS[c]}${excelRowNumber}`, finalCode);
+                    }
+                });
+
+                zip.file(sheetPath, sheetXml);
+                const buffer = await zip.generateAsync({ type: 'arraybuffer' });
+                const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+                
+                let tzoffset = (new Date()).getTimezoneOffset() * 60000;
+                let localISOTime = (new Date(Date.now() - tzoffset)).toISOString().slice(0, 10).replace(/-/g, "");
+                let fileName = `${localISOTime}_MallaOperativaGPF.xlsx`;
+                
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                
+                if (excedeCapacidad) {
+                    Swal.fire({
+                        icon: 'warning',
+                        title: 'Archivo generado (con aviso)',
+                        text: `La plantilla GPF solo tiene ${EMP_MAX_ROWS} filas de colaborador disponibles y hay ${empleados.length} cargados. Se exportaron solo los primeros ${EMP_MAX_ROWS}.`,
+                        confirmButtonColor: '#f59e0b'
+                    });
+                } else {
+                    Swal.fire({ icon: 'success', title: '¡Listo!', text: 'Se descargó el Excel y se abrió Biométrika en una pestaña nueva.', confirmButtonColor: '#10b981' });
+                }
+
+            } catch (error) {
+                console.error(error);
+                Swal.fire({ icon: 'error', title: 'Error de Exportación', text: 'Ocurrió un error al procesar el archivo Excel.', confirmButtonColor: '#ef4444' });
+            }
+        });
+    </script>
+</body>
+</html>
